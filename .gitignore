@@ -1,0 +1,12 @@
+data/*.db
+data/*.db-*
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.pio/
+
+# Local deployment configuration may contain Xiaomi bindkeys and the LAN ingest token.
+config/devices.json
+config/devices.local.json
+config/*.secret.json

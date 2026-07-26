@@ -1,0 +1,27 @@
+{
+  "proxies": [
+    {
+      "id": "proxy-living-area",
+      "name": "客餐厅代理",
+      "serial": "/dev/cu.usbmodemXXXX",
+      "enabled": true
+    }
+  ],
+  "network": {
+    "ingest_token": "REPLACE_WITH_RANDOM_TOKEN"
+  },
+  "devices": [
+    {
+      "address": "AA:BB:CC:DD:EE:01",
+      "name": "客厅",
+      "enabled": true,
+      "bindkey": "REPLACE_WITH_32_HEX_CHAR_BINDKEY"
+    },
+    {
+      "address": "AA:BB:CC:DD:EE:02",
+      "name": "卧室",
+      "enabled": true,
+      "bindkey": "REPLACE_WITH_32_HEX_CHAR_BINDKEY"
+    }
+  ]
+}
