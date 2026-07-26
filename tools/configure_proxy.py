@@ -61,7 +61,7 @@ def main() -> None:
         termios.tcdrain(fd)
         print("配置命令已发送，等待 ESP32 确认……")
 
-        deadline = time.time() + 4
+        deadline = time.time() + 12
         buffer = b""
         responses = []
         while time.time() < deadline:
