@@ -8,6 +8,7 @@ import getpass
 import json
 import os
 from pathlib import Path
+import select
 import termios
 import time
 
@@ -53,8 +54,33 @@ def main() -> None:
         attrs[5] = termios.B115200
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
         time.sleep(1)
-        os.write(fd, (json.dumps(payload, separators=(",", ":")) + "\n").encode())
-        print("配置命令已发送；设备会保存 Wi-Fi、Mac mini 地址、proxy_id 和 token。")
+        command = (json.dumps(payload, separators=(",", ":")) + "\n").encode()
+        written = 0
+        while written < len(command):
+            written += os.write(fd, command[written:])
+        termios.tcdrain(fd)
+        print("配置命令已发送，等待 ESP32 确认……")
+
+        deadline = time.time() + 4
+        buffer = b""
+        responses = []
+        while time.time() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.5)
+            if not ready:
+                continue
+            buffer += os.read(fd, 8192)
+            while b"\n" in buffer:
+                raw, buffer = buffer.split(b"\n", 1)
+                line = raw.decode("utf-8", errors="replace").strip()
+                if '"type":"config"' in line or '"type":"wifi"' in line or '"type":"upload"' in line:
+                    responses.append(line)
+
+        if responses:
+            print("ESP32 响应：")
+            for line in responses:
+                print(line)
+        else:
+            print("未收到 ESP32 配置确认，请检查串口、固件版本和 USB 连接。")
         print("随后可用 serial_capture.py 观察 wifi/upload 状态。")
     finally:
         os.close(fd)
