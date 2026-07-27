@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>油价监控 · 家庭监控</title>
+  <link rel="stylesheet" href="/common.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>油价监控</h1>
+      <div class="sub">国内成品油价格历史 + 最新调价 · 集成于家庭监控</div>
+    </div>
+    <div id="status" class="status">加载中…</div>
+  </header>
+
+  <!-- 功能模块 1：省份选择 / 油品选择 -->
+  <section>
+    <h2>当前油价 <span class="hint" id="asOf"></span></h2>
+    <div class="toolbar">
+      <span class="label">省份：</span>
+      <select id="province"></select>
+      <span class="label" style="margin-left:12px">油品：</span>
+      <button data-fuel="92" class="active">92#</button>
+      <button data-fuel="95">95#</button>
+      <button data-fuel="98">98#</button>
+      <button data-fuel="0">0# 柴油</button>
+      <span style="margin-left:auto;color:var(--muted);font-size:12px" id="lastAdjust"></span>
+    </div>
+    <div id="fuelGrid" class="fuel-grid"></div>
+  </section>
+
+  <!-- 功能模块 2：涨跌幅统计 + 趋势曲线 + 时间范围 -->
+  <section>
+    <h2>趋势分析 <span class="hint" id="rangeHint"></span></h2>
+    <div class="toolbar">
+      <span class="label">时间范围：</span>
+      <button data-days="30">近 1 月</button>
+      <button data-days="90">近 3 月</button>
+      <button data-days="365" class="active">近 1 年</button>
+      <button data-days="3650">全部</button>
+    </div>
+    <div class="stat-row" id="statRow"></div>
+    <div id="oilChart"></div>
+  </section>
+
+  <!-- 功能模块 3：最新调价信息 + 调价历史表 -->
+  <div class="row2">
+    <section>
+      <h2>最近一次调价</h2>
+      <div id="adjustCard" class="card" style="margin-top:6px">
+        <div class="metrics">
+          <div class="metric"><strong id="adjGasoline">—</strong><small>汽油 元/吨</small></div>
+          <div class="metric"><strong id="adjDiesel">—</strong><small>柴油 元/吨</small></div>
+        </div>
+        <div class="sub" id="adjMeta" style="margin-top:10px">—</div>
+      </div>
+      <h2 style="margin-top:18px">调价历史</h2>
+      <table class="tbl" id="adjTable">
+        <thead><tr><th>生效时间</th><th>汽油 元/吨</th><th>柴油 元/吨</th><th>来源</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>全国 92# 油价地图</h2>
+      <div id="map"></div>
+      <div class="sub" style="margin-top:6px">颜色：红=高 绿=低（基于 31 省当前价）</div>
+    </section>
+  </div>
+
+  <footer>数据源：江苏省发改委 / 国家发改委 / 东方财富（带 seed 兜底）。页面每 30 秒刷新一次。</footer>
+</main>
+<script src="/common.js"></script>
+<script>
+const PROVINCES = ["北京","天津","河北","山西","内蒙古","辽宁","吉林","黑龙江","上海","江苏","浙江","安徽","福建","江西","山东","河南","湖北","湖南","广东","广西","海南","重庆","四川","贵州","云南","西藏","陕西","甘肃","青海","宁夏","新疆"];
+let state = { province: '江苏', fuel: '92', days: 365 };
+
+const $ = id => document.getElementById(id);
+
+// 初始化省份下拉
+$('province').innerHTML = PROVINCES.map(p => `<option value="${p}"${p===state.province?' selected':''}>${p}</option>`).join('');
+
+document.querySelectorAll('button[data-fuel]').forEach(b => {
+  b.onclick = () => {
+    state.fuel = b.dataset.fuel;
+    document.querySelectorAll('button[data-fuel]').forEach(x => x.classList.toggle('active', x === b));
+    refreshAll();
+  };
+});
+document.querySelectorAll('button[data-days]').forEach(b => {
+  b.onclick = () => {
+    state.days = Number(b.dataset.days);
+    document.querySelectorAll('button[data-days]').forEach(x => x.classList.toggle('active', x === b));
+    refreshAll();
+  };
+});
+$('province').onchange = e => { state.province = e.target.value; refreshAll(); };
+
+// ---------- 当前价 ----------
+async function loadCurrent() {
+  const data = await HM.getJSON(`/api/oil/current?province=${encodeURIComponent(state.province)}`);
+  $('asOf').textContent = data.as_of ? `生效 ${HM.fmtTime(data.as_of)}` : '';
+  const grid = $('fuelGrid');
+  grid.innerHTML = (data.items || []).map(it => `
+    <div class="fuel-item confidence-${HM.esc(it.confidence || 'official')}">
+      <div class="label">${HM.esc(it.type)}# 汽油${it.type === '0' ? '（柴油）' : ''}</div>
+      <div class="price">${Number(it.price).toFixed(2)} <small style="font-size:14px;color:var(--muted)">元/升</small></div>
+      <div class="meta">生效 ${HM.fmtTime(it.effective_at)} · 来源 ${HM.esc(it.source)}</div>
+    </div>
+  `).join('') || '<div class="empty">暂无数据</div>';
+
+  if (data.last_adjustment) {
+    const a = data.last_adjustment;
+    $('lastAdjust').textContent = `最近调价：${HM.fmtDate(a.effective_at)} 汽油${a.gasoline_change>=0?'+':''}${a.gasoline_change} 柴油${a.diesel_change>=0?'+':''}${a.diesel_change}`;
+  } else {
+    $('lastAdjust').textContent = '';
+  }
+}
+
+// ---------- 历史曲线 + 涨跌幅统计 ----------
+let chart;
+async function loadHistory() {
+  const data = await HM.getJSON(`/api/oil/history?province=${encodeURIComponent(state.province)}&type=${state.fuel}&days=${state.days}`);
+  $('rangeHint').textContent = `共 ${data.series.length} 个数据点`;
+  // 涨跌幅统计
+  const s = data.stats || {};
+  $('statRow').innerHTML = `
+    <div class="stat"><small>区间起始</small><strong>${HM.fmtDate(s.first_date)} · ${s.first_value ?? '—'} 元</strong></div>
+    <div class="stat"><small>当前</small><strong>${HM.fmtDate(s.last_date)} · ${s.last_value ?? '—'} 元</strong></div>
+    <div class="stat"><small>涨跌</small><strong class="${(s.delta||0)>=0?'up':'down'}">${s.delta!=null?(s.delta>=0?'+':'')+s.delta.toFixed(2)+' 元':'—'}</strong></div>
+    <div class="stat"><small>涨跌幅</small><strong class="${(s.delta_pct||0)>=0?'up':'down'}">${s.delta_pct!=null?(s.delta_pct>=0?'+':'')+s.delta_pct.toFixed(2)+'%':'—'}</strong></div>
+  `;
+  // ECharts
+  if (!chart) chart = echarts.init($('oilChart'));
+  const adjX = (data.adjustments || []).map(a => a.date);
+  const adjSeries = (data.series || []).map(p => ({
+    value: [p.date, p.value],
+    itemStyle: adjX.includes(p.date) ? { color: '#c5453a' } : null,
+  }));
+  chart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: 50, right: 20, top: 30, bottom: 50 },
+    xAxis: { type: 'category', data: (data.series || []).map(p => p.date), axisLabel: { rotate: 30 } },
+    yAxis: { type: 'value', name: '元/升', scale: true },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18 }],
+    series: [{
+      name: state.fuel + '#', type: 'line', smooth: true, data: adjSeries,
+      lineStyle: { width: 2, color: '#167c80' },
+      areaStyle: { color: 'rgba(22,124,128,0.08)' },
+      markLine: {
+        symbol: 'none',
+        data: (data.adjustments || []).map(a => ({
+          xAxis: a.date,
+          label: { formatter: `调价\n${a.gasoline_change>=0?'+':''}${a.gasoline_change}`, color: '#c5453a' },
+          lineStyle: { color: '#c5453a', type: 'dashed' },
+        })),
+      },
+    }],
+  }, true);
+}
+
+// ---------- 调价历史 ----------
+async function loadAdjustments() {
+  const data = await HM.getJSON('/api/oil/adjustments?limit=10');
+  const evs = data.events || [];
+  $('adjTable').querySelector('tbody').innerHTML = evs.map(e => `
+    <tr>
+      <td>${HM.fmtTime(e.effective_at)}</td>
+      <td class="${e.gasoline_change>=0?'up':'down'}">${e.gasoline_change>=0?'+':''}${e.gasoline_change}</td>
+      <td class="${e.diesel_change>=0?'up':'down'}">${e.diesel_change>=0?'+':''}${e.diesel_change}</td>
+      <td>${HM.esc(e.source)}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="empty">暂无调价记录</td></tr>';
+  if (evs.length) {
+    const a = evs[0];
+    $('adjGasoline').textContent = (a.gasoline_change >= 0 ? '+' : '') + a.gasoline_change;
+    $('adjGasoline').className = a.gasoline_change >= 0 ? 'up' : 'down';
+    $('adjDiesel').textContent = (a.diesel_change >= 0 ? '+' : '') + a.diesel_change;
+    $('adjDiesel').className = a.diesel_change >= 0 ? 'up' : 'down';
+    $('adjMeta').textContent = `生效 ${HM.fmtTime(a.effective_at)} · 来源 ${HM.esc(a.source)}${a.notice_url ? ' · ' + HM.esc(a.notice_url) : ''}`;
+  }
+}
+
+// ---------- 地图 ----------
+let mapChart;
+async function loadMap() {
+  let data;
+  try {
+    data = await HM.getJSON('/api/oil/map');
+  } catch (e) { return; }
+  if (!data || !data.data) return;
+  if (!mapChart) mapChart = echarts.init($('map'));
+  mapChart.setOption({
+    tooltip: { trigger: 'item', formatter: p => `${p.name}<br/>${p.value ?? '—'} 元/升` },
+    visualMap: {
+      min: data.min, max: data.max, left: 20, bottom: 20,
+      inRange: { color: ['#2f8f4d', '#f3e96b', '#c5453a'] },
+      text: ['高', '低'], calculable: true,
+    },
+    series: [{
+      name: '92#', type: 'map', map: 'china',
+      data: data.data.map(d => ({ name: d.name, value: d.value })),
+    }],
+  });
+}
+// ECharts 地图需要 china GeoJSON；通过脚本动态注册
+function registerChinaMap() {
+  if (window.__chinaRegistered) return;
+  // 使用 datav.aliyun 公共 GeoJSON
+  fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
+    .then(r => r.json())
+    .then(geo => { echarts.registerMap('china', geo); window.__chinaRegistered = true; loadMap(); })
+    .catch(() => { $('map').innerHTML = '<div class="empty">地图数据加载失败</div>'; });
+}
+
+async function refreshAll() {
+  try {
+    await Promise.all([loadCurrent(), loadHistory(), loadAdjustments()]);
+    $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    $('status').textContent = '服务不可用：' + e.message;
+  }
+}
+
+// 启动
+if (window.echarts) {
+  registerChinaMap();
+} else {
+  // 等待 echarts 加载完成
+  const wait = setInterval(() => {
+    if (window.echarts) { clearInterval(wait); registerChinaMap(); }
+  }, 100);
+}
+refreshAll();
+setInterval(refreshAll, 30000);
+addEventListener('resize', () => { chart && chart.resize(); mapChart && mapChart.resize(); });
+</script>
+</body>
+</html>

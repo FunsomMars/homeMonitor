@@ -1,0 +1,45 @@
+{
+  "province": "江苏",
+  "source": "seed",
+  "history": [
+    {"fuel_type": "92", "effective_at": "2025-07-18T00:00:00+08:00", "price": 7.42},
+    {"fuel_type": "95", "effective_at": "2025-07-18T00:00:00+08:00", "price": 7.89},
+    {"fuel_type": "0",  "effective_at": "2025-07-18T00:00:00+08:00", "price": 7.08},
+
+    {"fuel_type": "92", "effective_at": "2025-08-06T00:00:00+08:00", "price": 7.35},
+    {"fuel_type": "95", "effective_at": "2025-08-06T00:00:00+08:00", "price": 7.82},
+    {"fuel_type": "0",  "effective_at": "2025-08-06T00:00:00+08:00", "price": 7.01},
+
+    {"fuel_type": "92", "effective_at": "2025-09-05T00:00:00+08:00", "price": 7.28},
+    {"fuel_type": "95", "effective_at": "2025-09-05T00:00:00+08:00", "price": 7.75},
+    {"fuel_type": "0",  "effective_at": "2025-09-05T00:00:00+08:00", "price": 6.94},
+
+    {"fuel_type": "92", "effective_at": "2025-10-10T00:00:00+08:00", "price": 7.21},
+    {"fuel_type": "95", "effective_at": "2025-10-10T00:00:00+08:00", "price": 7.68},
+    {"fuel_type": "0",  "effective_at": "2025-10-10T00:00:00+08:00", "price": 6.87},
+
+    {"fuel_type": "92", "effective_at": "2025-12-02T00:00:00+08:00", "price": 7.15},
+    {"fuel_type": "95", "effective_at": "2025-12-02T00:00:00+08:00", "price": 7.61},
+    {"fuel_type": "0",  "effective_at": "2025-12-02T00:00:00+08:00", "price": 6.81},
+
+    {"fuel_type": "92", "effective_at": "2026-01-21T00:00:00+08:00", "price": 7.22},
+    {"fuel_type": "95", "effective_at": "2026-01-21T00:00:00+08:00", "price": 7.68},
+    {"fuel_type": "0",  "effective_at": "2026-01-21T00:00:00+08:00", "price": 6.88},
+
+    {"fuel_type": "92", "effective_at": "2026-03-04T00:00:00+08:00", "price": 7.30},
+    {"fuel_type": "95", "effective_at": "2026-03-04T00:00:00+08:00", "price": 7.77},
+    {"fuel_type": "0",  "effective_at": "2026-03-04T00:00:00+08:00", "price": 6.96},
+
+    {"fuel_type": "92", "effective_at": "2026-05-13T00:00:00+08:00", "price": 7.18},
+    {"fuel_type": "95", "effective_at": "2026-05-13T00:00:00+08:00", "price": 7.65},
+    {"fuel_type": "0",  "effective_at": "2026-05-13T00:00:00+08:00", "price": 6.84},
+
+    {"fuel_type": "92", "effective_at": "2026-07-04T00:00:00+08:00", "price": 7.15},
+    {"fuel_type": "95", "effective_at": "2026-07-04T00:00:00+08:00", "price": 7.61},
+    {"fuel_type": "0",  "effective_at": "2026-07-04T00:00:00+08:00", "price": 6.81},
+
+    {"fuel_type": "92", "effective_at": "2026-07-18T00:00:00+08:00", "price": 7.39},
+    {"fuel_type": "95", "effective_at": "2026-07-18T00:00:00+08:00", "price": 7.86},
+    {"fuel_type": "0",  "effective_at": "2026-07-18T00:00:00+08:00", "price": 7.04}
+  ]
+}

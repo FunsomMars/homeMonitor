@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>温度监控 · 家庭监控</title>
+  <link rel="stylesheet" href="/common.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>温度监控</h1>
+      <div class="sub">ESP32 蓝牙代理 · Mac 本地历史</div>
+    </div>
+    <div id="status" class="status">连接中…</div>
+  </header>
+  <div id="cards" class="cards"></div>
+  <div class="toolbar">
+    <span class="label">时间范围：</span>
+    <button data-hours="6">6 小时</button>
+    <button data-hours="24" class="active">24 小时</button>
+    <button data-hours="72">3 天</button>
+    <button data-hours="168">7 天</button>
+  </div>
+  <section>
+    <h2>温度曲线 <span id="tempLegend"></span></h2>
+    <canvas id="temperature" width="1100" height="330"></canvas>
+  </section>
+  <section>
+    <h2>湿度曲线 <span id="humLegend"></span></h2>
+    <canvas id="humidity" width="1100" height="330"></canvas>
+  </section>
+  <footer>数据存储在 Mac mini 本地 SQLite。页面每 10 秒刷新一次；采样周期由温湿度计的 BLE 广播决定。</footer>
+</main>
+<script src="/common.js"></script>
+<script>
+let hours = 24, devices = [], readings = [];
+const $ = id => document.getElementById(id);
+
+document.querySelectorAll('button[data-hours]').forEach(b => {
+  b.onclick = () => {
+    hours = Number(b.dataset.hours);
+    document.querySelectorAll('button[data-hours]').forEach(x => x.classList.toggle('active', x === b));
+    refresh();
+  };
+});
+
+function fmt(v, unit) { return v == null ? '—' : `${Number(v).toFixed(unit === '°C' ? 1 : 0)}${unit}`; }
+
+function renderCards() {
+  $('cards').innerHTML = devices.map(d => {
+    const x = d.latest;
+    return `<div class="card">
+      <div class="room"><span>${HM.esc(d.name)}</span><span>${x ? new Date(x.observed_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '暂无数据'}</span></div>
+      <div class="metrics">
+        <div class="metric"><strong class="temp">${fmt(x?.temperature_c,'°C')}</strong><small>温度</small></div>
+        <div class="metric"><strong class="hum">${fmt(x?.humidity_pct,'%')}</strong><small>湿度</small></div>
+      </div>
+      <div class="sub">${x ? `RSSI ${x.rssi ?? '—'} dBm · ${HM.esc(x.protocol)}` : '等待蓝牙广播'}</div>
+    </div>`;
+  }).join('') || '<div class="card">请在 config/devices.json 配置设备地址。</div>';
+}
+
+function renderChart(id, key, color, unit) {
+  const canvas = $(id), ctx = canvas.getContext('2d');
+  const rect = canvas.getBoundingClientRect();
+  const dpr = devicePixelRatio || 1;
+  canvas.width = rect.width * dpr; canvas.height = 330 * dpr;
+  ctx.scale(dpr, dpr);
+  const w = rect.width, h = 330, p = { l: 48, r: 18, t: 20, b: 34 };
+  ctx.clearRect(0, 0, w, h);
+  if (!readings.length) { ctx.fillStyle = '#687582'; ctx.textAlign = 'center'; ctx.fillText('暂无数据', w/2, h/2); return; }
+  const vals = readings.map(x => Number(x[key])).filter(Number.isFinite);
+  const min = Math.floor(Math.min(...vals) - 1);
+  const max = Math.ceil(Math.max(...vals) + 1);
+  const start = Math.min(...readings.map(x => new Date(x.observed_at).getTime()));
+  const end = Math.max(start + 1, ...readings.map(x => new Date(x.observed_at).getTime()));
+  ctx.font = '12px -apple-system,sans-serif'; ctx.strokeStyle = '#e5eaec'; ctx.fillStyle = '#687582'; ctx.textAlign = 'right';
+  for (let i = 0; i < 5; i++) {
+    const y = p.t + (h - p.t - p.b) * i / 4;
+    const v = max - (max - min) * i / 4;
+    ctx.beginPath(); ctx.moveTo(p.l, y); ctx.lineTo(w - p.r, y); ctx.stroke();
+    ctx.fillText(`${v.toFixed(1)}${unit}`, p.l - 8, y + 4);
+  }
+  ctx.textAlign = 'center';
+  const groups = [...new Set(readings.map(x => x.address))];
+  const palette = ['#d87742', '#167c80', '#7955a5', '#4b78b5'];
+  groups.forEach((address, gi) => {
+    const series = readings
+      .filter(x => x.address === address && Number.isFinite(Number(x[key])))
+      .map(x => ({
+        x: p.l + (new Date(x.observed_at).getTime() - start) / (end - start) * (w - p.l - p.r),
+        y: p.t + (max - Number(x[key])) / (max - min) * (h - p.t - p.b),
+      }));
+    ctx.strokeStyle = palette[gi % palette.length];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    series.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y));
+    ctx.stroke();
+  });
+  const legend = $(id === 'temperature' ? 'tempLegend' : 'humLegend');
+  legend.innerHTML = groups.map((a, i) =>
+    `<span style="color:${palette[i%palette.length]};font-size:12px;margin-left:10px">● ${HM.esc((devices.find(d => d.address === a) || {}).name || a)}</span>`
+  ).join('');
+  ctx.fillStyle = '#687582';
+  [0, 0.5, 1].forEach(t => ctx.fillText(
+    new Date(start + (end - start) * t).toLocaleString([], { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }),
+    p.l + (w - p.l - p.r) * t, h - 10
+  ));
+}
+
+async function refresh() {
+  try {
+    const [d, r] = await Promise.all([
+      HM.getJSON('/api/devices'),
+      HM.getJSON(`/api/readings?hours=${hours}`),
+    ]);
+    devices = d; readings = (r.readings || []);
+    renderCards();
+    renderChart('temperature', 'temperature_c', '#d87742', '°C');
+    renderChart('humidity', 'humidity_pct', '#167c80', '%');
+    $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    $('status').textContent = '服务不可用';
+  }
+}
+addEventListener('resize', () => {
+  renderChart('temperature', 'temperature_c', '#d87742', '°C');
+  renderChart('humidity', 'humidity_pct', '#167c80', '%');
+});
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>
