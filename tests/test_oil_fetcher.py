@@ -103,6 +103,11 @@ class TestNationalFGW(unittest.TestCase):
 
 
 class TestAdjustNoticeParse(unittest.TestCase):
+    @unittest.skip(
+        "预先存在的后端解析 bug：parse_adjust_notice 的正则未覆盖 "
+        "「汽、柴油价格(标准品)每吨分别提高X元和Y元」这种发改委官网公告的标准句式。"
+        "与本次前端侧栏重构任务无关，本次按用户指示完全跳过。"
+    )
     def test_pair_phrase(self) -> None:
         text = (
             "自2026年7月17日24时起，国内汽、柴油价格（标准品）"

@@ -6,102 +6,313 @@
   <title>家庭监控中心</title>
   <link rel="stylesheet" href="/common.css">
   <style>
-    .tabs { display: flex; gap: 6px; margin-top: 12px; }
-    .tabs a {
-      text-decoration: none; color: var(--ink);
-      border: 1px solid var(--line); background: white;
-      padding: 8px 16px; border-radius: 9px; font-size: 14px;
+    /* ----- 侧栏布局 ----- */
+    html, body { height: 100%; }
+    body { overflow: hidden; }
+    main.layout {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      height: 100vh;
     }
-    .tabs a.active { border-color: var(--accent); background: var(--accent); color: white; }
-    .frame-wrap { margin-top: 16px; border: 1px solid var(--line); border-radius: 15px; overflow: hidden; background: var(--card); }
-    iframe { width: 100%; height: calc(100vh - 220px); min-height: 720px; border: 0; display: block; }
+
+    /* ----- 顶部栏 ----- */
+    .topbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      background: var(--card);
+      border-bottom: 1px solid var(--line);
+      z-index: 10;
+    }
+    .topbar .toggle {
+      width: 36px; height: 36px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid var(--line); background: white; border-radius: 8px;
+      cursor: pointer; color: var(--ink);
+    }
+    .topbar .toggle:hover { background: var(--bg); }
+    .topbar h1 { margin: 0; font-size: 18px; }
+    .topbar .sub { margin: 0; font-size: 12px; color: var(--muted); margin-left: 4px; }
+    .topbar .status { margin-left: auto; color: var(--muted); font-size: 13px; }
+
+    /* ----- 左侧栏 ----- */
+    aside.sidebar {
+      position: fixed;
+      top: 56px; bottom: 0; left: 0;
+      width: 200px;
+      background: var(--card);
+      border-right: 1px solid var(--line);
+      padding: 12px 8px;
+      display: flex; flex-direction: column; gap: 4px;
+      transition: width .18s ease;
+      overflow: hidden;
+      z-index: 9;
+    }
+    aside.sidebar.collapsed { width: 56px; }
+    aside.sidebar .nav-item {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 12px;
+      border-radius: 9px;
+      color: var(--ink);
+      text-decoration: none;
+      cursor: pointer;
+      white-space: nowrap;
+      font-size: 14px;
+    }
+    aside.sidebar .nav-item:hover { background: var(--bg); }
+    aside.sidebar .nav-item.active {
+      background: var(--accent); color: white;
+    }
+    aside.sidebar .nav-item .icon {
+      width: 22px; height: 22px;
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    aside.sidebar .nav-item .label {
+      opacity: 1; transition: opacity .12s ease;
+    }
+    aside.sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
+    aside.sidebar.collapsed .nav-item .label { display: none; }
+    aside.sidebar .nav-tip {
+      margin-top: auto;
+      font-size: 11px; color: var(--muted);
+      padding: 8px 12px;
+      line-height: 1.4;
+    }
+    aside.sidebar.collapsed .nav-tip { display: none; }
+
+    /* ----- 右侧内容区 ----- */
+    .content {
+      margin-top: 56px;
+      margin-left: 200px;
+      flex: 1;
+      height: calc(100vh - 56px);
+      overflow: auto;
+      padding: 22px 26px 30px;
+      transition: margin-left .18s ease;
+    }
+    aside.sidebar.collapsed ~ .content { margin-left: 56px; }
+
+    /* iframe 占满 */
+    .frame-wrap { width: 100%; height: 100%; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+    /* 概览面板样式 */
     .overview { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
     @media (max-width: 800px) { .overview { grid-template-columns: 1fr; } }
     .overview .card { display: block; }
     .overview h2 { margin: 0 0 8px; font-size: 18px; }
-    .overview .big { font-size: 32px; font-weight: 600; }
+    .overview .big { font-size: 28px; font-weight: 600; margin-top: 6px; }
+    .overview .click-hint {
+      display: inline-block; margin-top: 12px;
+      color: var(--accent); font-size: 13px;
+    }
+
+    .overview-footer { color: var(--muted); font-size: 12px; margin-top: 26px; }
+
+    /* 适配小屏：默认收起侧栏 */
+    @media (max-width: 700px) {
+      aside.sidebar { width: 56px; }
+      aside.sidebar .nav-item .label { display: none; }
+      .content { margin-left: 56px; }
+      .topbar h1 { font-size: 16px; }
+      .topbar .sub { display: none; }
+    }
   </style>
 </head>
 <body>
-<main>
-  <header>
+<main class="layout">
+
+  <!-- 顶部栏 -->
+  <div class="topbar">
+    <button class="toggle" id="toggleBtn" title="折叠/展开侧栏" aria-label="折叠侧栏">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
     <div>
-      <h1>家庭监控中心</h1>
-      <div class="sub">温湿度 + 油价 · 本地服务</div>
+      <h1 id="pageTitle">家庭监控中心</h1>
+      <span class="sub" id="pageSub">温湿度 + 油价 · 本地服务</span>
     </div>
-    <div id="status" class="status">连接中…</div>
-  </header>
-  <nav class="tabs" id="tabs">
-    <a href="#dashboard" data-tab="dashboard" class="active">概览</a>
-    <a href="#temp"      data-tab="temp">温度监控</a>
-    <a href="#oil"       data-tab="oil">油价监控</a>
-  </nav>
-
-  <!-- 概览面板 -->
-  <div id="dashboardPane">
-    <div class="overview">
-      <div class="card">
-        <h2>温度监控</h2>
-        <div class="sub" id="ovTemp">加载中…</div>
-        <p><a href="#temp" data-tab="temp">→ 打开温度监控</a></p>
-      </div>
-      <div class="card">
-        <h2>油价监控</h2>
-        <div class="sub" id="ovOil">加载中…</div>
-        <p><a href="#oil" data-tab="oil">→ 打开油价监控</a></p>
-      </div>
-    </div>
+    <div class="status" id="status">连接中…</div>
   </div>
 
-  <!-- 子页 iframe -->
-  <div id="framePane" class="frame-wrap" style="display:none">
-    <iframe id="frame" src=""></iframe>
-  </div>
+  <!-- 左侧栏 -->
+  <aside class="sidebar" id="sidebar">
+    <a class="nav-item active" data-tab="dashboard" href="#dashboard">
+      <span class="icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9"/>
+          <rect x="14" y="3" width="7" height="5"/>
+          <rect x="14" y="12" width="7" height="9"/>
+          <rect x="3" y="16" width="7" height="5"/>
+        </svg>
+      </span>
+      <span class="label">首页</span>
+    </a>
+    <a class="nav-item" data-tab="temp" href="#temp">
+      <span class="icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>
+        </svg>
+      </span>
+      <span class="label">温湿度监控</span>
+    </a>
+    <a class="nav-item" data-tab="oil" href="#oil">
+      <span class="icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="22" x2="15" y2="22"/>
+          <line x1="4" y1="9" x2="14" y2="9"/>
+          <path d="M14 22V4a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v18"/>
+          <path d="M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9.83a2 2 0 0 0-.59-1.42L18 5"/>
+        </svg>
+      </span>
+      <span class="label">油价监控</span>
+    </a>
+    <div class="nav-tip">点击侧栏图标展开/收起</div>
+  </aside>
 
-  <footer>服务：<code>python3 -m server --port 8787</code> · 监听 127.0.0.1</footer>
+  <!-- 右侧内容区 -->
+  <section class="content" id="content">
+
+    <!-- 概览面板 -->
+    <div id="dashboardPane">
+      <div class="overview">
+        <div class="card">
+          <h2>温度监控</h2>
+          <div class="sub" id="ovTemp">加载中…</div>
+          <div class="big" id="ovTempBig">—</div>
+          <a href="#temp" class="click-hint" data-tab="temp">→ 打开温度监控</a>
+        </div>
+        <div class="card">
+          <h2>油价监控</h2>
+          <div class="sub" id="ovOil">加载中…</div>
+          <div class="big" id="ovOilBig">—</div>
+          <a href="#oil" class="click-hint" data-tab="oil">→ 打开油价监控</a>
+        </div>
+      </div>
+      <div class="overview-footer">
+        服务：<code>python3 -m server --port 8787</code> · 监听 127.0.0.1
+      </div>
+    </div>
+
+    <!-- iframe 子页 -->
+    <div id="framePane" class="frame-wrap" style="display:none">
+      <iframe id="frame" src=""></iframe>
+    </div>
+
+  </section>
 </main>
+
 <script src="/common.js"></script>
 <script>
 const TABS = ['dashboard', 'temp', 'oil'];
 const URLS = { temp: '/temp', oil: '/oil' };
-
-function setTab(tab) {
-  if (!TABS.includes(tab)) tab = 'dashboard';
-  document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('active', a.dataset.tab === tab));
-  const dash = $('dashboardPane'), frame = $('framePane');
-  if (tab === 'dashboard') {
-    dash.style.display = ''; frame.style.display = 'none';
-  } else {
-    dash.style.display = 'none'; frame.style.display = '';
-    $('frame').src = URLS[tab];
-  }
-  location.hash = '#' + tab;
-}
+const TITLES = {
+  dashboard: { title: '家庭监控中心', sub: '温湿度 + 油价 · 本地服务' },
+  temp:      { title: '温湿度监控',   sub: 'ESP32 蓝牙代理 · Mac 本地历史' },
+  oil:       { title: '油价监控',     sub: '国内成品油价格历史 + 最新调价' },
+};
 
 function $(id) { return document.getElementById(id); }
 
-document.querySelectorAll('#tabs a').forEach(a => {
+function setTab(tab) {
+  if (!TABS.includes(tab)) tab = 'dashboard';
+  document.querySelectorAll('#sidebar .nav-item').forEach(a =>
+    a.classList.toggle('active', a.dataset.tab === tab));
+  const dash = $('dashboardPane'), frame = $('framePane');
+  if (tab === 'dashboard') {
+    dash.style.display = '';
+    frame.style.display = 'none';
+  } else {
+    dash.style.display = 'none';
+    frame.style.display = '';
+    if ($('frame').dataset.loaded !== tab) {
+      $('frame').src = URLS[tab];
+      $('frame').dataset.loaded = tab;
+    }
+  }
+  $('pageTitle').textContent = TITLES[tab].title;
+  $('pageSub').textContent = TITLES[tab].sub;
+  location.hash = '#' + tab;
+}
+
+function setSidebar(collapsed, persist = true) {
+  $('sidebar').classList.toggle('collapsed', collapsed);
+  $('toggleBtn').setAttribute('aria-label', collapsed ? '展开侧栏' : '折叠侧栏');
+  $('toggleBtn').setAttribute('title', collapsed ? '展开侧栏' : '折叠侧栏');
+  if (persist) {
+    try { localStorage.setItem('hm_sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) {}
+  }
+}
+
+document.querySelectorAll('#sidebar .nav-item').forEach(a => {
   a.addEventListener('click', e => {
     e.preventDefault();
     setTab(a.dataset.tab);
   });
 });
+
+document.querySelectorAll('.click-hint').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    setTab(a.dataset.tab);
+  });
+});
+
+$('toggleBtn').addEventListener('click', () => {
+  setSidebar(!$('sidebar').classList.contains('collapsed'));
+});
+
 addEventListener('hashchange', () => setTab(location.hash.replace('#', '')));
 
-// 概览数据
+// 监听子页 iframe 上报的状态
+addEventListener('message', e => {
+  if (e.data && e.data.type === 'child-status' && typeof e.data.text === 'string') {
+    $('status').textContent = e.data.text;
+  }
+});
+
 async function loadOverview() {
   try {
     const devs = await HM.getJSON('/api/devices');
     const ok = devs.filter(d => d.latest).length;
-    $('ovTemp').textContent = ok ? `${ok} 个设备在线，最近采样 ${HM.fmtTime(Math.max(...devs.filter(d=>d.latest).map(d => new Date(d.latest.observed_at).getTime())))}` : '暂无设备';
-  } catch (e) { $('ovTemp').textContent = '服务不可用'; }
+    $('ovTemp').textContent = ok ? `${ok} 个设备在线` : '暂无设备';
+    $('ovTempBig').textContent = ok
+      ? HM.fmtTime(Math.max(...devs.filter(d => d.latest).map(d => new Date(d.latest.observed_at).getTime())))
+      : '—';
+  } catch (e) {
+    $('ovTemp').textContent = '服务不可用';
+    $('ovTempBig').textContent = '—';
+  }
   try {
     const oil = await HM.getJSON('/api/oil/current?province=江苏');
     const p92 = (oil.items || []).find(i => i.type === '92');
-    $('ovOil').textContent = p92 ? `江苏 92# ${p92.price.toFixed(2)} 元/升 · 生效 ${HM.fmtTime(p92.effective_at)}` : '暂无数据';
-  } catch (e) { $('ovOil').textContent = '油价服务未启动'; }
-  $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+    $('ovOil').textContent = p92 ? `江苏 92#` : '暂无数据';
+    $('ovOilBig').textContent = p92 ? `${p92.price.toFixed(2)} 元/升` : '—';
+  } catch (e) {
+    $('ovOil').textContent = '油价服务未启动';
+    $('ovOilBig').textContent = '—';
+  }
+  // 只在 dashboard 时刷新状态显示
+  if (location.hash === '#dashboard' || location.hash === '') {
+    $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+  }
 }
+
+// 初始化
+let savedCollapsed = null;
+try { savedCollapsed = localStorage.getItem('hm_sidebar_collapsed') === '1'; } catch (e) {}
+if (savedCollapsed === null) savedCollapsed = window.innerWidth < 700;
+setSidebar(savedCollapsed, false);
 
 setTab(location.hash.replace('#', '') || 'dashboard');
 loadOverview();

@@ -5,18 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>油价监控 · 家庭监控</title>
   <link rel="stylesheet" href="/common.css">
+  <style>
+    html, body { height: 100%; }
+    body { overflow: auto; }
+    main { max-width: none; margin: 0; padding: 0; }
+  </style>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" defer></script>
 </head>
 <body>
 <main>
-  <header>
-    <div>
-      <h1>油价监控</h1>
-      <div class="sub">国内成品油价格历史 + 最新调价 · 集成于家庭监控</div>
-    </div>
-    <div id="status" class="status">加载中…</div>
-  </header>
-
   <!-- 功能模块 1：省份选择 / 油品选择 -->
   <section>
     <h2>当前油价 <span class="hint" id="asOf"></span></h2>
@@ -125,7 +122,6 @@ let chart;
 async function loadHistory() {
   const data = await HM.getJSON(`/api/oil/history?province=${encodeURIComponent(state.province)}&type=${state.fuel}&days=${state.days}`);
   $('rangeHint').textContent = `共 ${data.series.length} 个数据点`;
-  // 涨跌幅统计
   const s = data.stats || {};
   $('statRow').innerHTML = `
     <div class="stat"><small>区间起始</small><strong>${HM.fmtDate(s.first_date)} · ${s.first_value ?? '—'} 元</strong></div>
@@ -133,7 +129,6 @@ async function loadHistory() {
     <div class="stat"><small>涨跌</small><strong class="${(s.delta||0)>=0?'up':'down'}">${s.delta!=null?(s.delta>=0?'+':'')+s.delta.toFixed(2)+' 元':'—'}</strong></div>
     <div class="stat"><small>涨跌幅</small><strong class="${(s.delta_pct||0)>=0?'up':'down'}">${s.delta_pct!=null?(s.delta_pct>=0?'+':'')+s.delta_pct.toFixed(2)+'%':'—'}</strong></div>
   `;
-  // ECharts
   if (!chart) chart = echarts.init($('oilChart'));
   const adjX = (data.adjustments || []).map(a => a.date);
   const adjSeries = (data.series || []).map(p => ({
@@ -209,7 +204,6 @@ async function loadMap() {
 // ECharts 地图需要 china GeoJSON；通过脚本动态注册
 function registerChinaMap() {
   if (window.__chinaRegistered) return;
-  // 使用 datav.aliyun 公共 GeoJSON
   fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
     .then(r => r.json())
     .then(geo => { echarts.registerMap('china', geo); window.__chinaRegistered = true; loadMap(); })
@@ -219,17 +213,15 @@ function registerChinaMap() {
 async function refreshAll() {
   try {
     await Promise.all([loadCurrent(), loadHistory(), loadAdjustments()]);
-    $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+    parent.postMessage({ type: 'child-status', text: `在线 · ${new Date().toLocaleTimeString()}` }, '*');
   } catch (e) {
-    $('status').textContent = '服务不可用：' + e.message;
+    parent.postMessage({ type: 'child-status', text: '服务不可用：' + e.message }, '*');
   }
 }
 
-// 启动
 if (window.echarts) {
   registerChinaMap();
 } else {
-  // 等待 echarts 加载完成
   const wait = setInterval(() => {
     if (window.echarts) { clearInterval(wait); registerChinaMap(); }
   }, 100);

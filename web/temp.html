@@ -5,16 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>温度监控 · 家庭监控</title>
   <link rel="stylesheet" href="/common.css">
+  <style>
+    /* 作为 iframe 内容：去掉滚动/外距，继承主页布局 */
+    html, body { height: 100%; }
+    body { overflow: auto; }
+    main { max-width: none; margin: 0; padding: 0; }
+  </style>
 </head>
 <body>
 <main>
-  <header>
-    <div>
-      <h1>温度监控</h1>
-      <div class="sub">ESP32 蓝牙代理 · Mac 本地历史</div>
-    </div>
-    <div id="status" class="status">连接中…</div>
-  </header>
   <div id="cards" class="cards"></div>
   <div class="toolbar">
     <span class="label">时间范围：</span>
@@ -120,9 +119,9 @@ async function refresh() {
     renderCards();
     renderChart('temperature', 'temperature_c', '#d87742', '°C');
     renderChart('humidity', 'humidity_pct', '#167c80', '%');
-    $('status').textContent = `在线 · ${new Date().toLocaleTimeString()}`;
+    parent.postMessage({ type: 'child-status', text: `在线 · ${new Date().toLocaleTimeString()}` }, '*');
   } catch (e) {
-    $('status').textContent = '服务不可用';
+    parent.postMessage({ type: 'child-status', text: '服务不可用' }, '*');
   }
 }
 addEventListener('resize', () => {
