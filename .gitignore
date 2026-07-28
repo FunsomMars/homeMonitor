@@ -11,3 +11,6 @@ __pycache__/
 config/devices.json
 config/devices.local.json
 config/*.secret.json
+
+# Local OpenCode / IDE assistant configuration
+opencode.json
