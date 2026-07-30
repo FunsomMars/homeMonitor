@@ -1,15 +1,15 @@
-# 家庭温湿度监控
+# 家庭温湿度 + 黄金 + 油价监控
 
-基于 ESP32-S3-N16R8 蓝牙采集代理和 Mac mini 本地服务，采集两个 Xiaomi Smart Temperature and Humidity Monitor 3 Mini（型号 `MJWSD06MMC`）的温度、湿度、RSSI 和原始 BLE 广播，并在浏览器中查看历史曲线。
+基于 ESP32-S3-N16R8 蓝牙采集代理和 Mac mini 本地服务，采集两个 Xiaomi Smart Temperature and Humidity Monitor 3 Mini（型号 `MJWSD06MMC`）的温度、湿度、RSSI 和原始 BLE 广播，并在浏览器中查看历史曲线。同时集成上海黄金交易所 / 上海期货交易所 / COMEX GC=F 黄金主力 / 上海有色网金店挂牌价与江苏省油价调整 5 个数据面板。
 
 ## 当前方案
 
 ```text
 3 mini (BLE 广播) ──BLE──> ESP32-S3 ──USB CDC NDJSON──> Mac mini
                                                         │
-                                                        ├── SQLite
+                                                        ├── SQLite (telemetry.db / oil.db / gold.db)
                                                         ├── REST API
-                                                        └── Web UI
+                                                        └── Web UI (temp / oil / gold)
 ```
 
 - ESP32 只负责扫描和可靠转发原始广播，不在固件中绑定尚未确认的 Xiaomi 私有协议。
@@ -26,7 +26,11 @@ python3 -m pip install -r requirements.txt
 python3 -m server --port 8787 --serial /dev/cu.usbmodem5C941513621
 ```
 
-浏览器打开 <http://127.0.0.1:8787>。
+浏览器打开 <http://127.0.0.1:8787>。侧边栏可切换：
+
+- **温湿度监控** — 实时温湿度曲线（ESP32 + Xiaomi MJWSD06MMC）
+- **油价监控** — 江苏油价调整（国家发改委 / 江苏省发改委 / 东方财富）
+- **黄金监控** — 现货 / 期货 / 国际 / 金店挂牌价（4 张图）
 
 局域网模式下服务监听 Mac mini 的局域网地址，并使用 `network.ingest_token` 保护写入接口。ESP32 不需要持续 USB 连接，只需要首次烧录和配置时连接 USB，之后可用 USB 电源供电。
 
@@ -132,6 +136,31 @@ python3 -m pip install -r requirements.txt
 
 解析器同时保留 ATC/PVVX 和 BTHome v2 兼容格式，并以明确的 `protocol` 字段标识来源。
 
+## 黄金监控模块
+
+`web/gold.html` 是独立的 4 张图页面，上下排列：
+
+| # | 标题 | 数据源 | 单位 |
+|---|---|---|---|
+| 1 | 现货黄金 Au99.99 | 上海黄金交易所每日行情表 | 元/克 |
+| 2 | 期货黄金 沪金主力 | 上海期货交易所日结行情表 | 元/克 |
+| 3 | 国际黄金 GC=F | Yahoo Finance COMEX 主力 CSV | 美元/盎司 |
+| 4 | 金店挂牌价 | 上海有色网聚合页（11 品牌） | 元/克 |
+
+抓取由 `server/gold_fetcher/scheduler.py` 守护线程统一调度（默认 24h / 24h / 6h / 24h）；失败时使用 `data/seed/gold_history.json`（365 天日线）+ `data/seed/gold_brands.json`（12 品牌快照）兜底。
+
+新增 5 个 REST 端点（详见 `docs/gold/API.md`）：
+
+```bash
+curl http://127.0.0.1:8787/api/gold/health
+curl http://127.0.0.1:8787/api/gold/current
+curl 'http://127.0.0.1:8787/api/gold/history?channel=yahoo&days=90'
+curl -X POST -H "X-Home-Monitor-Token: <token>" \
+     -d '{"source":"all"}' http://127.0.0.1:8787/api/gold/refresh
+```
+
+数据库表结构见 `docs/gold/SCHEMA.md`。
+
 ## 验证
 
 ```bash
@@ -143,4 +172,6 @@ python3 -m unittest discover -s tests -v
 ```bash
 curl http://127.0.0.1:8787/api/health
 curl 'http://127.0.0.1:8787/api/readings?hours=24'
+curl http://127.0.0.1:8787/api/gold/health
+curl http://127.0.0.1:8787/api/gold/current
 ```

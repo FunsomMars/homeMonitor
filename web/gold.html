@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>黄金监控 · Home Monitor</title>
+  <link rel="stylesheet" href="/common.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <style>
+    .gold-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      background: var(--panel);
+      border-radius: 12px;
+      margin-bottom: 18px;
+      border: 1px solid var(--border);
+    }
+    .gold-toolbar .toolbar-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .gold-toolbar .toolbar-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-left: auto;
+    }
+    .gold-toolbar button {
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    .gold-toolbar button:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .gold-toolbar button.is-active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .gold-chart-card {
+      background: var(--panel);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 18px;
+      margin-bottom: 18px;
+    }
+    .gold-chart-header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .gold-chart-header .title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .gold-chart-header .price-now {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .gold-chart-header .price-delta {
+      font-size: 13px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    .price-delta.up {
+      background: rgba(220, 53, 69, 0.12);
+      color: #dc3545;
+    }
+    .price-delta.down {
+      background: rgba(40, 167, 69, 0.12);
+      color: #28a745;
+    }
+    .price-delta.flat {
+      background: rgba(108, 117, 125, 0.12);
+      color: #6c757d;
+    }
+    .gold-chart-header .price-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-left: auto;
+    }
+    .range-group {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .range-group button {
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .range-group button.is-active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .gold-chart {
+      width: 100%;
+      height: 280px;
+    }
+    .source-status {
+      display: inline-flex;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    .source-status .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+    .source-status .dot.ok { background: #28a745; }
+    .source-status .dot.fallback { background: #ffc107; }
+    .source-status .dot.fail { background: #dc3545; }
+  </style>
+</head>
+<body>
+  <div class="page-header">
+    <h1>黄金监控</h1>
+    <p class="subtitle">现货黄金 / 期货黄金 / 国际黄金 / 金店挂牌价 · 4 张日线走势图</p>
+  </div>
+
+  <div class="gold-toolbar">
+    <span class="toolbar-title">数据范围</span>
+    <button data-range="30" class="range-global">近 1 月</button>
+    <button data-range="90" class="range-global">近 3 月</button>
+    <button data-range="180" class="range-global is-active">近 6 月</button>
+    <button data-range="365" class="range-global">近 1 年</button>
+    <button data-range="1825" class="range-global">近 5 年</button>
+    <button id="refresh-btn">立即刷新</button>
+    <span class="toolbar-meta" id="last-update">--</span>
+  </div>
+
+  <!-- 图1: 现货黄金 -->
+  <section class="gold-chart-card" data-channel="sge" data-brand="">
+    <div class="gold-chart-header">
+      <span class="title">图1 · 现货黄金（上金所 Au99.99）</span>
+      <span class="price-now">--</span>
+      <span class="price-delta flat">--</span>
+      <div class="range-group">
+        <button data-range="30">1月</button>
+        <button data-range="90">3月</button>
+        <button data-range="180" class="is-active">6月</button>
+        <button data-range="365">1年</button>
+      </div>
+      <span class="price-meta"></span>
+    </div>
+    <div class="gold-chart" id="chart-sge"></div>
+  </section>
+
+  <!-- 图2: 期货黄金 -->
+  <section class="gold-chart-card" data-channel="shfe" data-brand="">
+    <div class="gold-chart-header">
+      <span class="title">图2 · 期货黄金（SHFE 沪金主力 AU）</span>
+      <span class="price-now">--</span>
+      <span class="price-delta flat">--</span>
+      <div class="range-group">
+        <button data-range="30">1月</button>
+        <button data-range="90">3月</button>
+        <button data-range="180" class="is-active">6月</button>
+        <button data-range="365">1年</button>
+      </div>
+      <span class="price-meta"></span>
+    </div>
+    <div class="gold-chart" id="chart-shfe"></div>
+  </section>
+
+  <!-- 图3: 国际黄金 -->
+  <section class="gold-chart-card" data-channel="yahoo" data-brand="">
+    <div class="gold-chart-header">
+      <span class="title">图3 · 国际黄金（COMEX GC=F · USD/oz）</span>
+      <span class="price-now">--</span>
+      <span class="price-delta flat">--</span>
+      <div class="range-group">
+        <button data-range="30">1月</button>
+        <button data-range="90">3月</button>
+        <button data-range="180" class="is-active">6月</button>
+        <button data-range="365">1年</button>
+        <button data-range="1825">5年</button>
+      </div>
+      <span class="price-meta"></span>
+    </div>
+    <div class="gold-chart" id="chart-yahoo"></div>
+  </section>
+
+  <!-- 图4: 金店挂牌价 -->
+  <section class="gold-chart-card" data-channel="smm" data-brand="">
+    <div class="gold-chart-header">
+      <span class="title">图4 · 金店挂牌价（多品牌聚合）</span>
+      <span class="price-now">多品牌</span>
+      <span class="price-delta flat">最近一日</span>
+      <div class="range-group">
+        <button data-range="30">1月</button>
+        <button data-range="90">3月</button>
+        <button data-range="180" class="is-active">6月</button>
+        <button data-range="365">1年</button>
+      </div>
+      <span class="price-meta"></span>
+    </div>
+    <div class="gold-chart" id="chart-smm"></div>
+  </section>
+
+  <footer class="page-footer">
+    <div class="source-status" id="source-status"></div>
+    <div>数据源：上海黄金交易所 / 上海期货交易所 / Yahoo Finance (GC=F) / 上海有色网聚合 · 60 秒刷新 · 失败自动回退 seed</div>
+  </footer>
+
+  <script src="/common.js"></script>
+  <script>
+    (function () {
+      const REFRESH_INTERVAL_MS = 60000;
+      const charts = {};
+      const cardState = {};
+
+      function fmtNumber(n, digits) {
+        if (n === null || n === undefined || Number.isNaN(n)) return '--';
+        return Number(n).toFixed(digits == null ? 2 : digits);
+      }
+
+      function fmtDelta(delta, pct) {
+        const sign = delta > 0 ? '+' : '';
+        return sign + fmtNumber(delta, 2) + ' (' + sign + fmtNumber(pct, 2) + '%)';
+      }
+
+      function deltaClass(delta) {
+        if (delta > 0.001) return 'up';
+        if (delta < -0.001) return 'down';
+        return 'flat';
+      }
+
+      function makeChartOption(channelMeta, points) {
+        const dates = points.map((p) => p[0]);
+        const values = points.map((p) => p[1]);
+        const isMulti = channelMeta.unit === 'multi';
+        return {
+          tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(20, 20, 30, 0.92)',
+            borderColor: '#333',
+            textStyle: { color: '#eee' },
+            valueFormatter: (v) => v == null ? '--' : Number(v).toFixed(2),
+          },
+          grid: { left: 50, right: 24, top: 28, bottom: 32 },
+          xAxis: {
+            type: 'category',
+            data: dates,
+            axisLine: { lineStyle: { color: '#888' } },
+            axisLabel: { color: '#888', fontSize: 11 },
+          },
+          yAxis: {
+            type: 'value',
+            scale: true,
+            axisLine: { lineStyle: { color: '#888' } },
+            axisLabel: {
+              color: '#888',
+              fontSize: 11,
+              formatter: (v) => Number(v).toFixed(0),
+            },
+            splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+          },
+          series: [
+            {
+              name: channelMeta.title,
+              type: 'line',
+              data: values,
+              smooth: true,
+              symbol: 'none',
+              lineStyle: { width: 2, color: '#d4af37' },
+              areaStyle: isMulti ? undefined : {
+                color: {
+                  type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                  colorStops: [
+                    { offset: 0, color: 'rgba(212, 175, 55, 0.32)' },
+                    { offset: 1, color: 'rgba(212, 175, 55, 0.02)' },
+                  ],
+                },
+              },
+            },
+          ],
+          animation: false,
+        };
+      }
+
+      function makeMultiSeriesOption(channelMeta, seriesData) {
+        const xSet = new Set();
+        seriesData.forEach((s) => s.points.forEach((p) => xSet.add(p[0])));
+        const dates = Array.from(xSet).sort();
+        const palette = ['#d4af37', '#9b59b6', '#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#1abc9c', '#34495e'];
+        return {
+          tooltip: {
+            trigger: 'axis',
+            backgroundColor: 'rgba(20, 20, 30, 0.92)',
+            borderColor: '#333',
+            textStyle: { color: '#eee' },
+          },
+          legend: {
+            top: 4,
+            textStyle: { color: '#888', fontSize: 11 },
+          },
+          grid: { left: 50, right: 24, top: 36, bottom: 32 },
+          xAxis: {
+            type: 'category',
+            data: dates,
+            axisLine: { lineStyle: { color: '#888' } },
+            axisLabel: { color: '#888', fontSize: 11 },
+          },
+          yAxis: {
+            type: 'value',
+            scale: true,
+            axisLine: { lineStyle: { color: '#888' } },
+            axisLabel: {
+              color: '#888',
+              fontSize: 11,
+              formatter: (v) => Number(v).toFixed(0),
+            },
+            splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+          },
+          series: seriesData.map((s, idx) => ({
+            name: s.brand,
+            type: 'line',
+            data: dates.map((d) => {
+              const found = s.points.find((p) => p[0] === d);
+              return found ? found[1] : null;
+            }),
+            smooth: true,
+            symbol: 'none',
+            lineStyle: { width: 1.5, color: palette[idx % palette.length] },
+            connectNulls: true,
+          })),
+          animation: false,
+        };
+      }
+
+      function loadHistory(channel, brand, days) {
+        const url = '/api/gold/history?channel=' + encodeURIComponent(channel)
+          + (brand ? '&brand=' + encodeURIComponent(brand) : '')
+          + '&days=' + days;
+        return fetch(url).then((r) => r.json()).then((j) => {
+          if (!j.ok) throw new Error(j.error || 'history failed');
+          return j;
+        });
+      }
+
+      function loadCurrent() {
+        return fetch('/api/gold/current').then((r) => r.json()).then((j) => {
+          if (!j.ok) throw new Error(j.error || 'current failed');
+          return j;
+        });
+      }
+
+      function loadChannels() {
+        return fetch('/api/gold/channels').then((r) => r.json()).then((j) => {
+          if (!j.ok) throw new Error(j.error || 'channels failed');
+          return j;
+        });
+      }
+
+      function renderCard(card) {
+        const channel = card.dataset.channel;
+        const brand = card.dataset.brand || '';
+        const meta = cardState[channel] || {};
+        const days = parseInt(card.querySelector('.range-group .is-active').dataset.range, 10);
+
+        const headerLeft = card.querySelector('.price-now');
+        const headerDelta = card.querySelector('.price-delta');
+        const headerMeta = card.querySelector('.price-meta');
+        const chartEl = card.querySelector('.gold-chart');
+
+        // 渲染当前价
+        if (meta && meta.current && brand === '') {
+          headerLeft.textContent = fmtNumber(meta.current.price, 2) + ' ' + (meta.current.unit || '');
+          const delta = (meta.current.price - meta.current.prev_close);
+          const pct = meta.current.prev_close ? (delta / meta.current.prev_close * 100) : 0;
+          headerDelta.textContent = fmtDelta(delta, pct);
+          headerDelta.className = 'price-delta ' + deltaClass(delta);
+          headerMeta.textContent = '源:' + meta.current.source + (meta.current.confidence === 'fallback' ? ' (fallback)' : '');
+        }
+
+        loadHistory(channel, brand, days).then((j) => {
+          const points = j.points || [];
+          if (!charts[channel]) {
+            charts[channel] = echarts.init(chartEl, null, { renderer: 'canvas' });
+          }
+          const opt = makeChartOption({ title: meta.title, unit: meta.unit }, points);
+          charts[channel].setOption(opt, true);
+        }).catch((err) => {
+          console.error('history error', channel, err);
+          if (!charts[channel]) {
+            charts[channel] = echarts.init(chartEl, null, { renderer: 'canvas' });
+          }
+          charts[channel].setOption({
+            title: {
+              text: '数据获取失败: ' + (err.message || ''),
+              left: 'center',
+              top: 'middle',
+              textStyle: { color: '#888', fontSize: 14 },
+            },
+          }, true);
+        });
+      }
+
+      function renderSmmCard(card) {
+        const days = parseInt(card.querySelector('.range-group .is-active').dataset.range, 10);
+        const headerMeta = card.querySelector('.price-meta');
+        const chartEl = card.querySelector('.gold-chart');
+
+        fetch('/api/gold/history?channel=smm&days=' + days).then((r) => r.json()).then((j) => {
+          if (!j.ok) throw new Error(j.error || 'smm history failed');
+          const seriesData = j.series || [];
+          if (!charts.smm) {
+            charts.smm = echarts.init(chartEl, null, { renderer: 'canvas' });
+          }
+          const opt = makeMultiSeriesOption({ title: '金店挂牌价' }, seriesData);
+          charts.smm.setOption(opt, true);
+
+          // 头部汇总：列出最新一日各品牌价
+          if (seriesData.length) {
+            const lastDate = seriesData[0].points.length ? seriesData[0].points[seriesData[0].points.length - 1][0] : '';
+            const summary = seriesData.map((s) => {
+              const last = s.points.length ? s.points[s.points.length - 1][1] : null;
+              return s.brand + ':' + (last == null ? '--' : fmtNumber(last, 0));
+            }).join('  ·  ');
+            headerMeta.textContent = (lastDate ? lastDate + ' · ' : '') + summary;
+          }
+        }).catch((err) => {
+          console.error('smm history error', err);
+          headerMeta.textContent = '数据获取失败: ' + err.message;
+        });
+      }
+
+      function renderAll() {
+        const cards = document.querySelectorAll('.gold-chart-card');
+        cards.forEach((card) => {
+          if (card.dataset.channel === 'smm') {
+            renderSmmCard(card);
+          } else {
+            renderCard(card);
+          }
+        });
+      }
+
+      function applyGlobalRange(days) {
+        document.querySelectorAll('.range-global').forEach((btn) => {
+          btn.classList.toggle('is-active', parseInt(btn.dataset.range, 10) === days);
+        });
+        // 同步到各卡片
+        document.querySelectorAll('.gold-chart-card').forEach((card) => {
+          card.querySelectorAll('.range-group button').forEach((btn) => {
+            btn.classList.toggle('is-active', parseInt(btn.dataset.range, 10) === days);
+          });
+        });
+        renderAll();
+      }
+
+      function applyCardRange(card, days) {
+        card.querySelectorAll('.range-group button').forEach((btn) => {
+          btn.classList.toggle('is-active', parseInt(btn.dataset.range, 10) === days);
+        });
+        if (card.dataset.channel === 'smm') renderSmmCard(card);
+        else renderCard(card);
+      }
+
+      function setupBindings() {
+        document.querySelectorAll('.range-global').forEach((btn) => {
+          btn.addEventListener('click', () => applyGlobalRange(parseInt(btn.dataset.range, 10)));
+        });
+        document.querySelectorAll('.gold-chart-card').forEach((card) => {
+          card.querySelectorAll('.range-group button').forEach((btn) => {
+            btn.addEventListener('click', () => applyCardRange(card, parseInt(btn.dataset.range, 10)));
+          });
+        });
+        document.getElementById('refresh-btn').addEventListener('click', () => {
+          fetch('/api/gold/refresh', { method: 'POST' })
+            .then((r) => r.json())
+            .then((j) => {
+              console.log('refresh', j);
+              renderAll();
+            })
+            .catch((e) => console.error('refresh err', e));
+        });
+      }
+
+      function renderSourceStatus(channels) {
+        const el = document.getElementById('source-status');
+        if (!channels || !channels.length) {
+          el.textContent = '';
+          return;
+        }
+        el.innerHTML = channels.map((c) => {
+          const dot = c.status === 'ok' ? 'ok' : (c.status === 'fallback' ? 'fallback' : 'fail');
+          const title = c.title || c.channel;
+          const updated = c.last_update || '--';
+          return '<span><span class="dot ' + dot + '"></span>' + title + ' · ' + updated + '</span>';
+        }).join('');
+      }
+
+      function boot() {
+        setupBindings();
+        loadChannels().then((j) => {
+          const chs = j.channels || [];
+          chs.forEach((c) => { cardState[c.channel] = c; });
+          renderSourceStatus(chs);
+          renderAll();
+        }).catch((e) => console.error('channels err', e));
+        setInterval(() => {
+          loadChannels().then((j) => {
+            const chs = j.channels || [];
+            chs.forEach((c) => { cardState[c.channel] = c; });
+            renderSourceStatus(chs);
+            renderAll();
+          }).catch(() => {});
+        }, REFRESH_INTERVAL_MS);
+        window.addEventListener('resize', () => {
+          Object.values(charts).forEach((c) => c && c.resize && c.resize());
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+      } else {
+        boot();
+      }
+    })();
+  </script>
+</body>
+</html>

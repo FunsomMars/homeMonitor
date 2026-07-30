@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .gold_format import CHANNELS, build_channels_meta, build_current, build_history_series
+from .gold_store import DEFAULT_DB as DEFAULT_GOLD_DB, GoldStore
 from .xiaomi_mjwsd06 import decode_advertisement
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +29,8 @@ def now_iso() -> str:
 
 
 class Store:
-    def __init__(self, db_path: Path, config_path: Path, ingest_token: str | None = None):
+    def __init__(self, db_path: Path, config_path: Path, ingest_token: str | None = None,
+                 gold_db_path: Path | None = None):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -49,6 +52,8 @@ class Store:
         }
         self.devices = self._load_devices(config_path)
         self.pending_readings: dict[str, dict[str, object]] = {}
+        # 黄金子模块（独立 SQLite，与 telemetry.db 物理隔离）
+        self.gold = GoldStore(gold_db_path or DEFAULT_GOLD_DB)
         self._init_db()
 
     @staticmethod
@@ -352,11 +357,115 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"readings": self.store.readings(hours, address), "hours": hours})
         if parsed.path == "/api/advertisements":
             return json_response(self, {"advertisements": self.store.recent_advertisements()})
+        # ---- 黄金监控 ----
+        if parsed.path == "/api/gold/current":
+            return json_response(self, build_current())
+        if parsed.path == "/api/gold/channels":
+            return json_response(self, build_channels_meta())
+        if parsed.path == "/api/gold/history":
+            channel = query.get("channel", ["sge"])[0]
+            if channel not in CHANNELS:
+                channel = "sge"
+            brand = query.get("brand", [""])[0]
+            try:
+                days = int(query.get("days", ["365"])[0])
+            except ValueError:
+                days = 365
+            days = max(0, min(days, 3650))
+            # 优先用 DB 真实历史；空时回退 seed
+            db_series = self.store.gold.history(channel, brand, days)
+            if not db_series:
+                from server.gold_format import load_seed_history as _seed_loader
+                seed_hist = _seed_loader()
+                payload = build_history_series(channel, brand, days, seed_history=seed_hist)
+            else:
+                from server.gold_format import CHANNEL_META as _gold_meta
+                meta = _gold_meta[channel]
+                stats = None
+                if db_series:
+                    first, last = db_series[0], db_series[-1]
+                    delta = round(last["value"] - first["value"], 2)
+                    delta_pct = round(delta / first["value"] * 100, 2) if first["value"] else 0
+                    stats = {
+                        "first_date": first["date"],
+                        "last_date": last["date"],
+                        "first_value": first["value"],
+                        "last_value": last["value"],
+                        "delta": delta,
+                        "delta_pct": delta_pct,
+                    }
+                payload = {
+                    "channel": channel,
+                    "brand": brand,
+                    "name": meta["name"],
+                    "unit": meta["unit"],
+                    "days": days,
+                    "series": db_series,
+                    "stats": stats,
+                }
+            return json_response(self, payload)
+        if parsed.path == "/api/gold/health":
+            return json_response(self, {
+                "channels": self.store.gold.channels_meta(),
+                "fetch_log": self.store.gold.fetch_log(20),
+                "time": now_iso(),
+            })
         return self._static(parsed.path)
 
     def do_POST(self):  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path != "/api/ingest":
+            # ---- 黄金手动刷新 ----
+            if parsed.path == "/api/gold/refresh":
+                configured_token = self.store.ingest_token
+                supplied_token = self.headers.get("X-Home-Monitor-Token", "")
+                authorization = self.headers.get("Authorization", "")
+                if authorization.startswith("Bearer "):
+                    supplied_token = authorization[7:]
+                if configured_token and supplied_token != configured_token:
+                    return json_response(self, {"error": "unauthorized"}, 401)
+                # 同步跑一次 4 个 fetcher；不影响后台守护线程节奏
+                from server.gold_fetcher.shfe import ShfeFuturesFetcher
+                from server.gold_fetcher.sge import SgeCurrentFetcher
+                from server.gold_fetcher.smm import SmmBrandFetcher
+                from server.gold_fetcher.yahoo import YahooGoldFetcher
+                from server.gold_format import parse_shfe_kx, parse_sge_table, parse_smm_html, parse_yahoo_csv
+                from server.gold_fetcher.yahoo import build_url as yahoo_url
+                from server.gold_fetcher.sge import LIST_URL as SGE_URL
+                from server.gold_fetcher.shfe import LIST_URL as SHFE_URL
+                from server.gold_fetcher.smm import LIST_URL as SMM_URL
+                import urllib.request as _ur
+
+                results: dict[str, dict] = {}
+                for ch, fetcher, url, parser in (
+                    ("sge",   SgeCurrentFetcher(),   SGE_URL,  parse_sge_table),
+                    ("shfe",  ShfeFuturesFetcher(),  SHFE_URL, parse_shfe_kx),
+                    ("yahoo", YahooGoldFetcher(),    yahoo_url(), parse_yahoo_csv),
+                    ("smm",   SmmBrandFetcher(),    SMM_URL,  parse_smm_html),
+                ):
+                    started = now_iso()
+                    try:
+                        req = _ur.Request(url, headers={"User-Agent": "homeMonitor-gold/1.0"})
+                        with _ur.urlopen(req, timeout=8) as resp:  # noqa: S310
+                            body = resp.read().decode("utf-8", errors="replace")
+                        rows = parser(body)
+                        for r in rows:
+                            self.store.gold.upsert_current(
+                                channel=ch, brand=r.get("brand", ""),
+                                price=r["price"], effective_at=r["effective_at"],
+                                source=ch, confidence="official",
+                            )
+                            self.store.gold.insert_history(
+                                channel=ch, brand=r.get("brand", ""),
+                                price=r["price"], effective_at=r["effective_at"],
+                                source=ch,
+                            )
+                        results[ch] = {"ok": True, "rows": len(rows)}
+                        self.store.gold.write_fetch_log(ch, started, now_iso(), "ok", None, len(rows))
+                    except Exception as exc:
+                        results[ch] = {"ok": False, "error": str(exc)}
+                        self.store.gold.write_fetch_log(ch, started, now_iso(), "failed", str(exc), 0)
+                return json_response(self, {"ok": True, "results": results})
             return json_response(self, {"error": "not found"}, 404)
         configured_token = self.store.ingest_token
         supplied_token = self.headers.get("X-Home-Monitor-Token", "")
@@ -415,11 +524,16 @@ def main():
     parser.add_argument("--serial", action="append", help="ESP32 serial port; repeat for multiple proxies")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--gold-db", type=Path, default=DEFAULT_GOLD_DB,
+                        help="gold prices sqlite (independent file)")
     parser.add_argument("--ingest-token", default=os.getenv("HOME_MONITOR_INGEST_TOKEN"))
+    parser.add_argument("--no-gold-scheduler", action="store_true",
+                        help="disable background gold fetcher daemon")
     parser.add_argument("--demo", action="store_true", help="generate synthetic readings")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    store = Store(args.db, args.config, ingest_token=args.ingest_token)
+    store = Store(args.db, args.config, ingest_token=args.ingest_token,
+                  gold_db_path=args.gold_db)
     readers: list[threading.Thread] = []
     if args.demo:
         readers.append(DemoReader(store))
@@ -439,6 +553,12 @@ def main():
                     "enabled": True, "connected": False, "last_seen": None, "error": None,
                 })
                 readers.append(SerialReader(proxy["serial"], store, proxy["id"]))
+    # 黄金后台调度（默认开启；demo 模式不跑，避免外部请求污染日志）
+    if not args.demo and not args.no_gold_scheduler:
+        from .gold_fetcher.scheduler import GoldScheduler
+        sched = GoldScheduler(store.gold)
+        sched.start()
+        readers.append(sched)
     for reader in readers:
         reader.start()
     Handler.store = store
@@ -453,7 +573,8 @@ def main():
     finally:
         server.shutdown()
         for reader in readers:
-            reader.stop_event.set()
+            if hasattr(reader, "stop_event"):
+                reader.stop_event.set()
 
 
 if __name__ == "__main__":

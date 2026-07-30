@@ -104,11 +104,13 @@
     iframe { width: 100%; height: 100%; border: 0; display: block; }
 
     /* 概览面板样式 */
-    .overview { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-    @media (max-width: 800px) { .overview { grid-template-columns: 1fr; } }
+    .overview { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+    @media (max-width: 1000px) { .overview { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 700px) { .overview { grid-template-columns: 1fr; } }
     .overview .card { display: block; }
     .overview h2 { margin: 0 0 8px; font-size: 18px; }
-    .overview .big { font-size: 28px; font-weight: 600; margin-top: 6px; }
+    .overview .big { font-size: 26px; font-weight: 600; margin-top: 6px; }
+    .overview .sub { color: var(--muted); font-size: 12px; }
     .overview .click-hint {
       display: inline-block; margin-top: 12px;
       color: var(--accent); font-size: 13px;
@@ -140,7 +142,7 @@
     </button>
     <div>
       <h1 id="pageTitle">家庭监控中心</h1>
-      <span class="sub" id="pageSub">温湿度 + 油价 · 本地服务</span>
+      <span class="sub" id="pageSub">温湿度 + 油价 + 黄金 · 本地服务</span>
     </div>
     <div class="status" id="status">连接中…</div>
   </div>
@@ -177,6 +179,18 @@
       </span>
       <span class="label">油价监控</span>
     </a>
+    <a class="nav-item" data-tab="gold" href="#gold">
+      <span class="icon" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M8 11.5l1.6-3.5h4.8L16 11.5"/>
+          <path d="M7 13.5h10"/>
+          <path d="M8.5 16h7"/>
+          <circle cx="12" cy="11.5" r="0.6" fill="currentColor"/>
+        </svg>
+      </span>
+      <span class="label">黄金监控</span>
+    </a>
     <div class="nav-tip">点击侧栏图标展开/收起</div>
   </aside>
 
@@ -198,6 +212,12 @@
           <div class="big" id="ovOilBig">—</div>
           <a href="#oil" class="click-hint" data-tab="oil">→ 打开油价监控</a>
         </div>
+        <div class="card">
+          <h2>黄金监控</h2>
+          <div class="sub" id="ovGold">加载中…</div>
+          <div class="big" id="ovGoldBig">—</div>
+          <a href="#gold" class="click-hint" data-tab="gold">→ 打开黄金监控</a>
+        </div>
       </div>
       <div class="overview-footer">
         服务：<code>python3 -m server --port 8787</code> · 监听 127.0.0.1
@@ -214,12 +234,13 @@
 
 <script src="/common.js"></script>
 <script>
-const TABS = ['dashboard', 'temp', 'oil'];
-const URLS = { temp: '/temp', oil: '/oil' };
+const TABS = ['dashboard', 'temp', 'oil', 'gold'];
+const URLS = { temp: '/temp', oil: '/oil', gold: '/gold' };
 const TITLES = {
-  dashboard: { title: '家庭监控中心', sub: '温湿度 + 油价 · 本地服务' },
+  dashboard: { title: '家庭监控中心', sub: '温湿度 + 油价 + 黄金 · 本地服务' },
   temp:      { title: '温湿度监控',   sub: 'ESP32 蓝牙代理 · Mac 本地历史' },
   oil:       { title: '油价监控',     sub: '国内成品油价格历史 + 最新调价' },
+  gold:      { title: '黄金监控',     sub: '现货 / 期货 / 国际 / 金店挂牌价 4 张走势图' },
 };
 
 function $(id) { return document.getElementById(id); }
@@ -301,6 +322,18 @@ async function loadOverview() {
   } catch (e) {
     $('ovOil').textContent = '油价服务未启动';
     $('ovOilBig').textContent = '—';
+  }
+  try {
+    const gold = await HM.getJSON('/api/gold/current');
+    const items = (gold.items || []);
+    const sge = items.find(i => i.channel === 'sge');
+    const yahoo = items.find(i => i.channel === 'yahoo');
+    const last = sge || yahoo || items[0];
+    $('ovGold').textContent = last ? `${last.unit || ''} · ${last.source || ''}` : '暂无数据';
+    $('ovGoldBig').textContent = last ? `${(last.price || 0).toFixed(2)}` : '—';
+  } catch (e) {
+    $('ovGold').textContent = '黄金服务未启动';
+    $('ovGoldBig').textContent = '—';
   }
   // 只在 dashboard 时刷新状态显示
   if (location.hash === '#dashboard' || location.hash === '') {
