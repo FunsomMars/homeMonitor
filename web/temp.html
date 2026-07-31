@@ -6,10 +6,25 @@
   <title>温度监控 · 家庭监控</title>
   <link rel="stylesheet" href="/common.css">
   <style>
-    /* 作为 iframe 内容：去掉滚动/外距，继承主页布局 */
-    html, body { height: 100%; }
-    body { overflow: auto; }
+    /* iframe 内容：让父容器统一管理滚动 */
+    html, body { min-height: 100%; }
+    body { overflow: visible; background: transparent; }
     main { max-width: none; margin: 0; padding: 0; }
+    /* 图表标题：让图例紧跟标题，并提供 hover 高亮 */
+    section h2 { display: flex; align-items: baseline; flex-wrap: wrap; }
+    section h2 > span[id$="Legend"] {
+      font-size: 12px; font-weight: 400; letter-spacing: 0;
+      text-transform: none; color: var(--muted);
+    }
+    section h2 > span[id$="Legend"] span {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 8px; margin-left: 8px; border-radius: 6px;
+      background: rgba(15, 26, 35, .04);
+      transition: background .12s ease;
+    }
+    section h2 > span[id$="Legend"] span:hover { background: rgba(15, 26, 35, .08); }
+    /* toolbar 紧凑 */
+    .toolbar { margin-top: 18px; }
   </style>
 </head>
 <body>
@@ -24,11 +39,11 @@
   </div>
   <section>
     <h2>温度曲线 <span id="tempLegend"></span></h2>
-    <canvas id="temperature" width="1100" height="330"></canvas>
+    <div class="chart-box"><canvas id="temperature"></canvas></div>
   </section>
   <section>
     <h2>湿度曲线 <span id="humLegend"></span></h2>
-    <canvas id="humidity" width="1100" height="330"></canvas>
+    <div class="chart-box"><canvas id="humidity"></canvas></div>
   </section>
   <footer>数据存储在 Mac mini 本地 SQLite。页面每 10 秒刷新一次；采样周期由温湿度计的 BLE 广播决定。</footer>
 </main>
@@ -61,52 +76,292 @@ function renderCards() {
   }).join('') || '<div class="card">请在 config/devices.json 配置设备地址。</div>';
 }
 
-function renderChart(id, key, color, unit) {
+// ==== 时间刻度：根据宽度自动选刻度间隔 ====
+const TICK_INTERVALS = [
+  60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000, 30 * 60_000,
+  60 * 60_000, 2 * 60 * 60_000, 3 * 60 * 60_000, 6 * 60 * 60_000,
+  12 * 60 * 60_000, 24 * 60 * 60_000, 2 * 24 * 60 * 60_000, 7 * 24 * 60 * 60_000,
+];
+function pickTickInterval(rangeMs, targetCount) {
+  const target = rangeMs / targetCount;
+  for (const step of TICK_INTERVALS) if (step >= target) return step;
+  return TICK_INTERVALS[TICK_INTERVALS.length - 1];
+}
+function formatTickLabel(date, intervalMs) {
+  if (intervalMs >= 24 * 60 * 60_000) {
+    return date.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+  }
+  return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function drawXTicks(ctx, start, end, left, right, baselineY) {
+  const innerW = right - left;
+  const range = end - start;
+  const targetCount = Math.max(4, Math.min(10, Math.floor(innerW / 110)));
+  const interval = pickTickInterval(range, targetCount);
+  const firstTick = Math.ceil(start / interval) * interval;
+  ctx.fillStyle = '#9aa6ad';
+  ctx.textAlign = 'center';
+  ctx.strokeStyle = '#e5eaec';
+  ctx.lineWidth = 1;
+  for (let t = firstTick; t <= end; t += interval) {
+    const x = left + (t - start) / range * innerW;
+    ctx.beginPath();
+    ctx.moveTo(x, baselineY - 14);
+    ctx.lineTo(x, baselineY - 10);
+    ctx.stroke();
+    ctx.fillText(formatTickLabel(new Date(t), interval), x, baselineY + 4);
+  }
+}
+
+// ==== 图表绘制 ====
+function renderChart(id, key, unit) {
   const canvas = $(id), ctx = canvas.getContext('2d');
-  const rect = canvas.getBoundingClientRect();
-  const dpr = devicePixelRatio || 1;
-  canvas.width = rect.width * dpr; canvas.height = 330 * dpr;
-  ctx.scale(dpr, dpr);
-  const w = rect.width, h = 330, p = { l: 48, r: 18, t: 20, b: 34 };
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  if (!w) return;
+  const h = 220, p = { l: 48, r: 18, t: 16, b: 32 };
+  const targetW = Math.round(w * dpr), targetH = Math.round(h * dpr);
+  if (canvas.width !== targetW || canvas.height !== targetH) {
+    canvas.width = targetW;
+    canvas.height = targetH;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  if (!readings.length) { ctx.fillStyle = '#687582'; ctx.textAlign = 'center'; ctx.fillText('暂无数据', w/2, h/2); return; }
-  const vals = readings.map(x => Number(x[key])).filter(Number.isFinite);
-  const min = Math.floor(Math.min(...vals) - 1);
-  const max = Math.ceil(Math.max(...vals) + 1);
+
+  const validReadings = readings.filter(x => Number.isFinite(Number(x[key])));
+  const groups = [...new Set(validReadings.map(x => x.address))];
+  const palette = ['#d87742', '#167c80', '#7955a5', '#4b78b5'];
+
+  if (!validReadings.length) {
+    ctx.fillStyle = '#9aa6ad';
+    ctx.textAlign = 'center';
+    ctx.fillText(readings.length ? '该时段无有效数据' : '暂无数据', w / 2, h / 2);
+    updateLegend(id, [], palette);
+    bindHover(canvas, id, key, unit);
+    return;
+  }
+
+  const vals = validReadings.map(x => Number(x[key]));
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if (max === min) { min -= 1; max += 1; }
+  else { min = Math.floor(min - 1); max = Math.ceil(max + 1); }
+
   const start = Math.min(...readings.map(x => new Date(x.observed_at).getTime()));
   const end = Math.max(start + 1, ...readings.map(x => new Date(x.observed_at).getTime()));
-  ctx.font = '12px -apple-system,sans-serif'; ctx.strokeStyle = '#e5eaec'; ctx.fillStyle = '#687582'; ctx.textAlign = 'right';
+
+  // Y 轴网格 + 刻度
+  ctx.font = '11px -apple-system,sans-serif';
+  ctx.strokeStyle = '#eef1f3';
+  ctx.fillStyle = '#9aa6ad';
+  ctx.textAlign = 'right';
   for (let i = 0; i < 5; i++) {
     const y = p.t + (h - p.t - p.b) * i / 4;
     const v = max - (max - min) * i / 4;
     ctx.beginPath(); ctx.moveTo(p.l, y); ctx.lineTo(w - p.r, y); ctx.stroke();
-    ctx.fillText(`${v.toFixed(1)}${unit}`, p.l - 8, y + 4);
+    ctx.fillText(`${v.toFixed(1)}${unit}`, p.l - 8, y + 3);
   }
+
+  // X 轴刻度（更多）
+  drawXTicks(ctx, start, end, p.l, w - p.r, h - 8);
+
+  // 数据线
   ctx.textAlign = 'center';
-  const groups = [...new Set(readings.map(x => x.address))];
-  const palette = ['#d87742', '#167c80', '#7955a5', '#4b78b5'];
+  const seriesByAddr = {};
   groups.forEach((address, gi) => {
-    const series = readings
-      .filter(x => x.address === address && Number.isFinite(Number(x[key])))
+    const series = validReadings
+      .filter(x => x.address === address)
       .map(x => ({
+        time: new Date(x.observed_at).getTime(),
+        value: Number(x[key]),
         x: p.l + (new Date(x.observed_at).getTime() - start) / (end - start) * (w - p.l - p.r),
         y: p.t + (max - Number(x[key])) / (max - min) * (h - p.t - p.b),
       }));
-    ctx.strokeStyle = palette[gi % palette.length];
-    ctx.lineWidth = 2;
+    if (!series.length) return;
+    seriesByAddr[address] = { series, color: palette[gi % palette.length], gi };
+    const color = palette[gi % palette.length];
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'round';
     ctx.beginPath();
     series.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y));
     ctx.stroke();
   });
+
+  updateLegend(id, groups, palette);
+
+  // 悬停叠加层
+  if (hoverState && hoverState.chartId === id) {
+    drawHover(ctx, hoverState, {
+      p, w, h, start, end, min, max, seriesByAddr, key, unit,
+    });
+  }
+
+  bindHover(canvas, id, key, unit);
+}
+
+// ==== 悬停 tooltip ====
+let hoverState = null; // { chartId, mx }
+let hoverFrame = null;
+function scheduleHoverRedraw() {
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(() => {
+    hoverFrame = null;
+    if (!hoverState) return;
+    const c = $(hoverState.chartId);
+    if (!c) return;
+    renderChart(c.id, c.dataset.key, c.dataset.unit);
+  });
+}
+function bindHover(canvas, id, key, unit) {
+  canvas.dataset.key = key;
+  canvas.dataset.unit = unit;
+  if (canvas._hoverBound) return;
+  canvas._hoverBound = true;
+  canvas.style.cursor = 'crosshair';
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    if (hoverState && hoverState.chartId === id && Math.abs(hoverState.mx - mx) < 0.5) return;
+    hoverState = { chartId: id, mx };
+    scheduleHoverRedraw();
+  });
+  canvas.addEventListener('mouseleave', () => {
+    if (hoverState && hoverState.chartId === id) {
+      hoverState = null;
+      if (hoverFrame) { cancelAnimationFrame(hoverFrame); hoverFrame = null; }
+      renderChart(id, key, unit);
+    }
+  });
+}
+function drawHover(ctx, info, st) {
+  const { p, w, h, start, end, min, max, seriesByAddr, unit } = st;
+  const innerW = w - p.l - p.r;
+  let hx = info.mx;
+  if (hx < p.l) hx = p.l;
+  if (hx > w - p.r) hx = w - p.r;
+  const hoverTime = start + (hx - p.l) / innerW * (end - start);
+
+  // 对每个设备找最近点
+  const points = [];
+  for (const address in seriesByAddr) {
+    const { series, color } = seriesByAddr[address];
+    let nearest = series[0], best = Math.abs(nearest.time - hoverTime);
+    for (const pt of series) {
+      const d = Math.abs(pt.time - hoverTime);
+      if (d < best) { nearest = pt; best = d; }
+    }
+    points.push({ ...nearest, color, address });
+  }
+  points.sort((a, b) => Math.abs(a.time - hoverTime) - Math.abs(b.time - hoverTime));
+
+  // 引导虚线
+  ctx.save();
+  ctx.strokeStyle = '#17212b55';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(hx, p.t);
+  ctx.lineTo(hx, h - p.b);
+  ctx.stroke();
+  ctx.restore();
+
+  // 高亮点
+  points.forEach(pt => {
+    ctx.fillStyle = pt.color;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+
+  // tooltip 框
+  const tooltipTime = new Date(hoverTime);
+  const lines = points.map(pt => {
+    const name = (devices.find(d => d.address === pt.address) || {}).name || pt.address;
+    const isTemp = pt.address in seriesByAddr;
+    const valStr = `${pt.value.toFixed(st.key === 'temperature_c' ? 1 : 0)}${unit}`;
+    return { name, value: valStr, color: pt.color };
+  });
+  ctx.font = '12px -apple-system,sans-serif';
+  const padX = 12, padTop = 10, padBottom = 8, lineH = 22, headerH = 26;
+  const headerText = tooltipTime.toLocaleString('zh-CN',
+    { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const nameFont = '12px -apple-system,sans-serif';
+  const valueFont = '600 13px -apple-system,sans-serif';
+  ctx.font = nameFont;
+  let maxRowW = ctx.measureText(headerText).width;
+  ctx.font = valueFont;
+  for (const l of lines) {
+    maxRowW = Math.max(maxRowW, ctx.measureText(l.name).width + ctx.measureText(l.value).width + 22);
+  }
+  ctx.font = nameFont;
+  const boxW = Math.ceil(maxRowW) + padX * 2;
+  const boxH = padTop + headerH + lines.length * lineH + padBottom;
+
+  let bx = hx + 14;
+  if (bx + boxW > w - p.r) bx = hx - 14 - boxW;
+  let by = p.t;
+  if (by + boxH > h - p.b) by = h - p.b - boxH;
+
+  ctx.fillStyle = 'rgba(255,255,255,0.97)';
+  ctx.strokeStyle = '#dce3e8';
+  ctx.lineWidth = 1;
+  roundRect(ctx, bx, by, boxW, boxH, 7);
+  ctx.fill();
+  ctx.stroke();
+
+  // 标题
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#6b7780';
+  ctx.font = '600 12px -apple-system,sans-serif';
+  ctx.fillText(headerText, bx + padX, by + padTop + 10);
+
+  // 标题与数据之间的细分隔线
+  const dividerY = by + padTop + headerH - 4;
+  ctx.strokeStyle = '#eef1f3';
+  ctx.beginPath();
+  ctx.moveTo(bx + padX - 4, dividerY);
+  ctx.lineTo(bx + boxW - padX + 4, dividerY);
+  ctx.stroke();
+
+  // 数据行
+  const rowsTop = by + padTop + headerH + 4;
+  lines.forEach((l, i) => {
+    const ly = rowsTop + i * lineH;
+    // 颜色点
+    ctx.fillStyle = l.color;
+    ctx.beginPath(); ctx.arc(bx + padX + 4, ly - 5, 3.5, 0, Math.PI * 2); ctx.fill();
+    // 名称
+    ctx.fillStyle = '#17212b';
+    ctx.font = nameFont;
+    ctx.fillText(l.name, bx + padX + 14, ly);
+    // 数值（右对齐、加粗、染色）
+    ctx.textAlign = 'right';
+    ctx.font = valueFont;
+    ctx.fillStyle = l.color;
+    ctx.fillText(l.value, bx + boxW - padX, ly);
+    ctx.textAlign = 'left';
+  });
+}
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function updateLegend(id, groups, palette) {
   const legend = $(id === 'temperature' ? 'tempLegend' : 'humLegend');
-  legend.innerHTML = groups.map((a, i) =>
-    `<span style="color:${palette[i%palette.length]};font-size:12px;margin-left:10px">● ${HM.esc((devices.find(d => d.address === a) || {}).name || a)}</span>`
-  ).join('');
-  ctx.fillStyle = '#687582';
-  [0, 0.5, 1].forEach(t => ctx.fillText(
-    new Date(start + (end - start) * t).toLocaleString([], { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }),
-    p.l + (w - p.l - p.r) * t, h - 10
-  ));
+  if (!groups.length) { legend.innerHTML = ''; return; }
+  legend.innerHTML = groups.map((a, i) => {
+    const color = palette[i % palette.length];
+    const name = HM.esc((devices.find(d => d.address === a) || {}).name || a);
+    return `<span style="color:${color}"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color}"></span>${name}</span>`;
+  }).join('');
 }
 
 async function refresh() {
@@ -117,19 +372,43 @@ async function refresh() {
     ]);
     devices = d; readings = (r.readings || []);
     renderCards();
-    renderChart('temperature', 'temperature_c', '#d87742', '°C');
-    renderChart('humidity', 'humidity_pct', '#167c80', '%');
+    renderChart('temperature', 'temperature_c', '°C');
+    renderChart('humidity', 'humidity_pct', '%');
     parent.postMessage({ type: 'child-status', text: `在线 · ${new Date().toLocaleTimeString()}` }, '*');
   } catch (e) {
     parent.postMessage({ type: 'child-status', text: '服务不可用' }, '*');
   }
 }
-addEventListener('resize', () => {
-  renderChart('temperature', 'temperature_c', '#d87742', '°C');
-  renderChart('humidity', 'humidity_pct', '#167c80', '%');
-});
+
+function redrawCharts() {
+  requestAnimationFrame(() => {
+    renderChart('temperature', 'temperature_c', '°C');
+    renderChart('humidity', 'humidity_pct', '%');
+  });
+}
+
+addEventListener('resize', redrawCharts);
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(redrawCharts);
+  ro.observe(document.body);
+}
+
 refresh();
 setInterval(refresh, 10000);
+
+// 上报内容高度给父页，让父容器统一管理滚动条
+function reportHeight() {
+  const h = Math.max(
+    document.documentElement.scrollHeight,
+    document.body ? document.body.scrollHeight : 0
+  );
+  parent.postMessage({ type: 'child-height', height: h }, '*');
+}
+reportHeight();
+addEventListener('resize', reportHeight);
+if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(document.body);
+setTimeout(reportHeight, 200);
+setTimeout(reportHeight, 1000);
 </script>
 </body>
 </html>

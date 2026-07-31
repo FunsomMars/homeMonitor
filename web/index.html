@@ -118,6 +118,13 @@
 
     .overview-footer { color: var(--muted); font-size: 12px; margin-top: 26px; }
 
+    /* 首页黄金卡：4 个 channel 拼成 2x2 小网格 */
+    .ovGoldGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 10px 0 12px; }
+    .ovGoldGrid .cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .ovGoldGrid .cell .k { color: var(--muted); font-size: 11px; }
+    .ovGoldGrid .cell .v { font-size: 16px; font-weight: 600; color: var(--ink); }
+    .overview .card .click-hint { margin-top: 4px; }
+
     /* 适配小屏：默认收起侧栏 */
     @media (max-width: 700px) {
       aside.sidebar { width: 56px; }
@@ -215,7 +222,12 @@
         <div class="card">
           <h2>黄金监控</h2>
           <div class="sub" id="ovGold">加载中…</div>
-          <div class="big" id="ovGoldBig">—</div>
+          <div class="ovGoldGrid" id="ovGoldGrid">
+            <div class="cell"><span class="k">现 货</span><span class="v" id="ovGoldSge">—</span></div>
+            <div class="cell"><span class="k">期 货</span><span class="v" id="ovGoldShfe">—</span></div>
+            <div class="cell"><span class="k">国 际</span><span class="v" id="ovGoldYahoo">—</span></div>
+            <div class="cell"><span class="k">金 店</span><span class="v" id="ovGoldSmm">—</span></div>
+          </div>
           <a href="#gold" class="click-hint" data-tab="gold">→ 打开黄金监控</a>
         </div>
       </div>
@@ -325,15 +337,43 @@ async function loadOverview() {
   }
   try {
     const gold = await HM.getJSON('/api/gold/current');
-    const items = (gold.items || []);
-    const sge = items.find(i => i.channel === 'sge');
-    const yahoo = items.find(i => i.channel === 'yahoo');
-    const last = sge || yahoo || items[0];
-    $('ovGold').textContent = last ? `${last.unit || ''} · ${last.source || ''}` : '暂无数据';
-    $('ovGoldBig').textContent = last ? `${(last.price || 0).toFixed(2)}` : '—';
+    const channels = (gold && gold.channels) || {};
+    // 4 个 channel 当前价 → 首页 2x2 网格。SMM 是多品牌取均值作为"金店"代表价。
+    function fmtPrice(ch) {
+      const c = channels[ch];
+      if (!c || !c.items || !c.items.length) return '—';
+      const items = c.items;
+      if (c.kind === 'multi') {
+        const avg = items.map((it) => Number(it.price)).filter(Number.isFinite)
+          .reduce((a, b) => a + b, 0) / items.length;
+        return Number.isFinite(avg)
+          ? `${Math.round(avg * 100) / 100} ${c.unit || ''}（${items.length} 品牌）`
+          : '—';
+      }
+      const it = items.find((x) => !x.brand) || items[0];
+      return it ? `${Number(it.price).toFixed(2)} ${c.unit || ''}` : '—';
+    }
+    const updates = {
+      sge:   fmtPrice('sge'),
+      shfe:  fmtPrice('shfe'),
+      yahoo: fmtPrice('yahoo'),
+      smm:   fmtPrice('smm'),
+    };
+    $('ovGoldSge').textContent   = updates.sge;
+    $('ovGoldShfe').textContent  = updates.shfe;
+    $('ovGoldYahoo').textContent = updates.yahoo;
+    $('ovGoldSmm').textContent   = updates.smm;
+    // sub 行写"更新于 …"；任一通道有有效数据就算成功
+    const anyUpdate = channels.sge && channels.sge.as_of;
+    $('ovGold').textContent = anyUpdate
+      ? `更新于 ${(channels.sge.as_of || '').slice(0, 10)}`
+      : '暂无数据';
   } catch (e) {
     $('ovGold').textContent = '黄金服务未启动';
-    $('ovGoldBig').textContent = '—';
+    $('ovGoldSge').textContent = '—';
+    $('ovGoldShfe').textContent = '—';
+    $('ovGoldYahoo').textContent = '—';
+    $('ovGoldSmm').textContent = '—';
   }
   // 只在 dashboard 时刷新状态显示
   if (location.hash === '#dashboard' || location.hash === '') {

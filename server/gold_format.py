@@ -209,7 +209,12 @@ def build_current(seed_history=None, seed_brands=None) -> dict:
 
 def build_history_series(channel: str, brand: str, days: int,
                          seed_history=None) -> dict:
-    """构造 ``/api/gold/history`` 响应：单 channel 单 brand 的曲线 + 涨跌幅统计。"""
+    """构造 ``/api/gold/history`` 响应：单 channel 单 brand 的曲线 + 涨跌幅统计。
+
+    SMM 是多品牌 channel：当 ``brand`` 为空时，返回按 brand 分组的 series
+    （元素为 ``{"brand", "points": [[date, value], ...]}``），与前端多线图对齐。
+    其他 channel 仍然返回扁平 ``series: [{"date", "value"}]``。
+    """
     if channel not in CHANNELS:
         channel = "sge"
     if seed_history is None:
@@ -217,8 +222,59 @@ def build_history_series(channel: str, brand: str, days: int,
     meta = CHANNEL_META[channel]
 
     rows = seed_history["channels"].get(channel, [])
-    rows = _filter_by_brand(rows, brand)
     rows.sort(key=lambda r: r["effective_at"])
+
+    # --- SMM 多品牌：无 brand 时返回按品牌分组的 series ---
+    if channel == "smm" and not brand:
+        by_brand: dict[str, list[dict]] = {}
+        for r in rows:
+            by_brand.setdefault(r.get("brand", ""), []).append(r)
+        # 按 brand 各自截断天数
+        series: list[dict] = []
+        for bname, brows in by_brand.items():
+            cropped = brows
+            if days > 0 and brows:
+                last_dt = datetime.fromisoformat(brows[-1]["effective_at"])
+                cutoff = last_dt - timedelta(days=days)
+                cropped = [r for r in brows if datetime.fromisoformat(r["effective_at"]) >= cutoff]
+            points = [[r["effective_at"][:10], r["price"]] for r in cropped]
+            if points:
+                series.append({"brand": bname, "points": points})
+        # 整体 stats：按 brand 在最后日的均价聚合
+        stats = None
+        if series:
+            last_dates = {s["points"][-1][0] for s in series if s["points"]}
+            last_date = max(last_dates) if last_dates else None
+            first_date = min((s["points"][0][0] for s in series if s["points"]), default=None)
+            if last_date and first_date:
+                vals_last = [s["points"][-1][1] for s in series if s["points"] and s["points"][-1][0] == last_date]
+                vals_first = [s["points"][0][1] for s in series if s["points"] and s["points"][0][0] == first_date]
+                if vals_last and vals_first:
+                    avg_last = round(sum(vals_last) / len(vals_last), 2)
+                    avg_first = round(sum(vals_first) / len(vals_first), 2)
+                    delta = round(avg_last - avg_first, 2)
+                    delta_pct = round(delta / avg_first * 100, 2) if avg_first else 0
+                    stats = {
+                        "first_date": first_date,
+                        "last_date": last_date,
+                        "first_value": avg_first,
+                        "last_value": avg_last,
+                        "delta": delta,
+                        "delta_pct": delta_pct,
+                    }
+        return {
+            "channel": channel,
+            "brand": "",
+            "name": meta["name"],
+            "unit": meta["unit"],
+            "kind": meta["kind"],
+            "days": days,
+            "series": series,
+            "stats": stats,
+        }
+
+    # --- 单品牌 / 单 channel 默认路径 ---
+    rows = _filter_by_brand(rows, brand)
 
     if days > 0 and rows:
         last_dt = datetime.fromisoformat(rows[-1]["effective_at"])
@@ -246,21 +302,29 @@ def build_history_series(channel: str, brand: str, days: int,
         "brand": brand,
         "name": meta["name"],
         "unit": meta["unit"],
+        "kind": meta["kind"],
         "days": days,
         "series": series,
         "stats": stats,
     }
 
 
-def build_channels_meta(seed_history=None) -> dict:
-    """构造 ``/api/gold/channels`` 响应：4 个 channel 的元信息。"""
+def build_channels_meta(seed_history=None, source_status: dict | None = None) -> dict:
+    """构造 ``/api/gold/channels`` 响应：4 个 channel 的元信息。
+
+    ``source_status`` 形如 ``{channel: {"last_run_at": ..., "last_status": ...}}``，
+    来自 gold_source 表；缺失时退路为 None。
+    """
     if seed_history is None:
         seed_history = load_seed_history()
+    if source_status is None:
+        source_status = {}
     out = []
     for ch in CHANNELS:
         meta = CHANNEL_META[ch]
         rows = seed_history["channels"].get(ch, [])
         as_of = max((r["effective_at"] for r in rows), default=None)
+        src = source_status.get(ch, {})
         out.append({
             "channel": ch,
             "name": meta["name"],
@@ -268,6 +332,8 @@ def build_channels_meta(seed_history=None) -> dict:
             "kind": meta["kind"],
             "row_count": len(rows),
             "seed_as_of": as_of,
+            "last_run_at": src.get("last_run_at"),
+            "last_status": src.get("last_status"),
         })
     return {"channels": out}
 

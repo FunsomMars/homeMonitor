@@ -5,8 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>黄金监控 · Home Monitor</title>
   <link rel="stylesheet" href="/common.css">
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <script src="/vendor/echarts.min.js" defer></script>
   <style>
+    /* 黄金页主题：去掉 common.css 里偏绿的 --bg（#f3f6f5）和青绿 --accent（#167c80），
+       改用中性的纸面白 + 黄金棕作为主色，避免被误认为"绿色背景"。 */
+    :root {
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --border: #e6e1d4;
+      --text: #1f1c14;
+      --muted: #8a8270;
+      --accent: #b58a2c;
+    }
+    body { background: var(--bg); }
     .gold-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -225,7 +236,7 @@
 
   <footer class="page-footer">
     <div class="source-status" id="source-status"></div>
-    <div>数据源：上海黄金交易所 / 上海期货交易所 / Yahoo Finance (GC=F) / 上海有色网聚合 · 60 秒刷新 · 失败自动回退 seed</div>
+    <div>数据源：上海黄金交易所 / 上海期货交易所 / Yahoo Finance (GC=F) / 上海有色网 · 60 秒自动刷新</div>
   </footer>
 
   <script src="/common.js"></script>
@@ -234,6 +245,8 @@
       const REFRESH_INTERVAL_MS = 60000;
       const charts = {};
       const cardState = {};
+      // /api/gold/current 返回的 4 个 channel 当前价（同步填充 header）
+      const currentByCh = {};
 
       function fmtNumber(n, digits) {
         if (n === null || n === undefined || Number.isNaN(n)) return '--';
@@ -251,10 +264,10 @@
         return 'flat';
       }
 
+      // 单品牌曲线：points 形如 [[date, value], ...]
       function makeChartOption(channelMeta, points) {
         const dates = points.map((p) => p[0]);
         const values = points.map((p) => p[1]);
-        const isMulti = channelMeta.unit === 'multi';
         return {
           tooltip: {
             trigger: 'axis',
@@ -289,7 +302,7 @@
               smooth: true,
               symbol: 'none',
               lineStyle: { width: 2, color: '#d4af37' },
-              areaStyle: isMulti ? undefined : {
+              areaStyle: {
                 color: {
                   type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
                   colorStops: [
@@ -304,9 +317,10 @@
         };
       }
 
+      // SMM 多品牌：seriesData 形如 [{brand, points: [[date, value], ...]}, ...]
       function makeMultiSeriesOption(channelMeta, seriesData) {
         const xSet = new Set();
-        seriesData.forEach((s) => s.points.forEach((p) => xSet.add(p[0])));
+        seriesData.forEach((s) => (s.points || []).forEach((p) => xSet.add(p[0])));
         const dates = Array.from(xSet).sort();
         const palette = ['#d4af37', '#9b59b6', '#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#1abc9c', '#34495e'];
         return {
@@ -342,7 +356,7 @@
             name: s.brand,
             type: 'line',
             data: dates.map((d) => {
-              const found = s.points.find((p) => p[0] === d);
+              const found = (s.points || []).find((p) => p[0] === d);
               return found ? found[1] : null;
             }),
             smooth: true,
@@ -354,71 +368,213 @@
         };
       }
 
-      function loadHistory(channel, brand, days) {
+      // 单品牌 / 单 channel history 转成 ECharts 用的 [[date, value], ...]
+      function seriesToPoints(series) {
+        return (series || []).map((p) => [p.date, p.value]);
+      }
+
+      // ---------- localStorage 缓存层（stale-while-revalidate） ----------
+      // 思路：current/channels 用短 TTL（~30s）实时校验；history 用长 TTL（~10min）
+      // 首次访问没有缓存就拉网络；之后命中立即返回 cached.data，stale 则后台刷新。
+      const CACHE_VERSION = 'v2';
+      const CACHE_TTL = {
+        current: 30 * 1000,
+        channels: 30 * 1000,
+        history: 10 * 60 * 1000,
+      };
+      // 防止同名请求并发：每个 key 同时只发一个网络请求，其他调用复用同一个 Promise
+      const inflight = {};
+
+      function cacheKey(scope) {
+        return 'gold:' + scope + ':' + CACHE_VERSION;
+      }
+
+      function cacheGet(scope) {
+        try {
+          const raw = localStorage.getItem(cacheKey(scope));
+          if (!raw) return null;
+          const entry = JSON.parse(raw);
+          if (!entry || typeof entry.ts !== 'number') return null;
+          return entry;
+        } catch (_) { return null; }
+      }
+
+      function cacheSet(scope, data) {
+        try {
+          localStorage.setItem(cacheKey(scope), JSON.stringify({ ts: Date.now(), data }));
+        } catch (_) { /* quota / disabled — silently fall back to network */ }
+      }
+
+      async function fetchJson(url) {
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      }
+
+      // swr：fresh 直接返回；stale 立即返回 stale 并后台 revalidate；miss 才走网络 await
+      async function swr(scope, url, ttlMs) {
+        const entry = cacheGet(scope);
+        const fresh = entry && (Date.now() - entry.ts) < ttlMs;
+        const stale = entry && !fresh;
+        if (entry) {
+          if (fresh) return entry.data;
+          if (stale) {
+            // 立即返回旧值，并在后台触发更新（去重 + 失败静默）
+            if (!inflight[scope]) {
+              inflight[scope] = fetchJson(url)
+                .then((j) => { cacheSet(scope, j); inflight[scope] = null; return j; })
+                .catch(() => { inflight[scope] = null; });
+            }
+            return entry.data;
+          }
+        }
+        // 首次或缓存丢失：等待网络
+        const j = await fetchJson(url);
+        cacheSet(scope, j);
+        return j;
+      }
+
+      async function loadHistory(channel, brand, days) {
         const url = '/api/gold/history?channel=' + encodeURIComponent(channel)
           + (brand ? '&brand=' + encodeURIComponent(brand) : '')
           + '&days=' + days;
-        return fetch(url).then((r) => r.json()).then((j) => {
-          if (!j.ok) throw new Error(j.error || 'history failed');
-          return j;
-        });
+        const scope = 'history:' + channel + ':' + (brand || '') + ':' + days;
+        return swr(scope, url, CACHE_TTL.history);
       }
 
-      function loadCurrent() {
-        return fetch('/api/gold/current').then((r) => r.json()).then((j) => {
-          if (!j.ok) throw new Error(j.error || 'current failed');
-          return j;
-        });
+      async function loadCurrent() {
+        return swr('current', '/api/gold/current', CACHE_TTL.current);
       }
 
-      function loadChannels() {
-        return fetch('/api/gold/channels').then((r) => r.json()).then((j) => {
-          if (!j.ok) throw new Error(j.error || 'channels failed');
-          return j;
-        });
+      async function loadChannels() {
+        return swr('channels', '/api/gold/channels', CACHE_TTL.channels);
+      }
+
+      // SMM 旧服务端兜底：多品牌接口为空时，按 /api/gold/current 列出的 brand 逐个拉历史，
+      // 在 client 端聚合出与新接口等价的 shape，使图表仍能渲染。
+      async function loadSmmClientFallback(days) {
+        let cur;
+        try { cur = await loadCurrent(); } catch (_) { return null; }
+        const items = (cur && cur.channels && cur.channels.smm && cur.channels.smm.items) || [];
+        const brands = items.map((it) => it.brand).filter(Boolean);
+        if (!brands.length) return null;
+        const settled = await Promise.allSettled(brands.map((b) =>
+          loadHistory('smm', b, days).then((j) => ({ brand: b, series: j.series || [] }))));
+        const ok = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value);
+        if (!ok.length) return null;
+        // 构造 seed 风格响应（[brand, points]）
+        const series = ok.map((s) => ({
+          brand: s.brand,
+          points: s.series.map((p) => [p.date, p.value]),
+        }));
+        const valid = series.filter((s) => s.points.length);
+        if (!valid.length) return null;
+        // 简单 stats：所有品牌在最后一日均价
+        const lastDates = valid.map((s) => s.points[s.points.length - 1][0]);
+        const lastDate = lastDates.length ? lastDates.reduce((a, b) => (a > b ? a : b)) : null;
+        const firstDates = valid.map((s) => s.points[0][0]);
+        const firstDate = firstDates.length ? firstDates.reduce((a, b) => (a < b ? a : b)) : null;
+        let stats = null;
+        if (lastDate && firstDate) {
+          const vl = valid.filter((s) => s.points[s.points.length - 1][0] === lastDate)
+            .map((s) => s.points[s.points.length - 1][1]);
+          const vf = valid.filter((s) => s.points[0][0] === firstDate)
+            .map((s) => s.points[0][1]);
+          if (vl.length && vf.length) {
+            const al = Math.round(vl.reduce((a, b) => a + b, 0) / vl.length * 100) / 100;
+            const af = Math.round(vf.reduce((a, b) => a + b, 0) / vf.length * 100) / 100;
+            const delta = Math.round((al - af) * 100) / 100;
+            stats = { first_date: firstDate, last_date: lastDate,
+                      first_value: af, last_value: al, delta, delta_pct: af ? Math.round(delta / af * 10000) / 100 : 0 };
+          }
+        }
+        return { channel: 'smm', brand: '', kind: 'multi', days, series: valid, stats };
+      }
+
+      function renderCurrentHeader(card) {
+        const channel = card.dataset.channel;
+        const data = currentByCh[channel];
+        const headerLeft = card.querySelector('.price-now');
+        const headerDelta = card.querySelector('.price-delta');
+        const headerMeta = card.querySelector('.price-meta');
+        if (!data) {
+          headerLeft.textContent = '--';
+          headerDelta.textContent = '--';
+          headerDelta.className = 'price-delta flat';
+          headerMeta.textContent = '';
+          return;
+        }
+        // 单 channel 取 brand="" 的 item（SMM 取平均作为 header 数值）
+        let item = null;
+        if (data.items && data.items.length) {
+          item = data.items.find((it) => !it.brand) || data.items[0] || null;
+          if (channel === 'smm' && data.items.length > 1) {
+            const avg = data.items
+              .map((it) => Number(it.price))
+              .filter((v) => Number.isFinite(v))
+              .reduce((a, b) => a + b, 0) / data.items.length;
+            item = { ...item, price: Math.round(avg * 100) / 100 };
+          }
+        }
+        if (!item) {
+          headerLeft.textContent = '--';
+          headerDelta.textContent = '--';
+          headerDelta.className = 'price-delta flat';
+          headerMeta.textContent = data.unit ? '单位:' + data.unit : '';
+          return;
+        }
+        const unit = data.unit || '';
+        headerLeft.textContent = fmtNumber(item.price, 2) + (unit ? ' ' + unit : '');
+        // 涨跌：与 series[0].value 对比
+        const hist = cardState[channel] && cardState[channel].historyHead;
+        let delta = 0;
+        let pct = 0;
+        if (hist && hist.first_value != null && hist.first_value !== 0) {
+          delta = round2(item.price - hist.first_value);
+          pct = round2(delta / hist.first_value * 100);
+        }
+        headerDelta.textContent = fmtDelta(delta, pct);
+        headerDelta.className = 'price-delta ' + deltaClass(delta);
+        // 只展示"更新于 日期"；避免把内部抓取机制（seed / 兜底）暴露给用户
+        const asOf = item.effective_at ? '更新于 ' + item.effective_at.slice(0, 10) : '';
+        headerMeta.textContent = asOf;
       }
 
       function renderCard(card) {
         const channel = card.dataset.channel;
         const brand = card.dataset.brand || '';
-        const meta = cardState[channel] || {};
         const days = parseInt(card.querySelector('.range-group .is-active').dataset.range, 10);
-
-        const headerLeft = card.querySelector('.price-now');
-        const headerDelta = card.querySelector('.price-delta');
-        const headerMeta = card.querySelector('.price-meta');
         const chartEl = card.querySelector('.gold-chart');
+        const meta = cardState[channel] || {};
 
-        // 渲染当前价
-        if (meta && meta.current && brand === '') {
-          headerLeft.textContent = fmtNumber(meta.current.price, 2) + ' ' + (meta.current.unit || '');
-          const delta = (meta.current.price - meta.current.prev_close);
-          const pct = meta.current.prev_close ? (delta / meta.current.prev_close * 100) : 0;
-          headerDelta.textContent = fmtDelta(delta, pct);
-          headerDelta.className = 'price-delta ' + deltaClass(delta);
-          headerMeta.textContent = '源:' + meta.current.source + (meta.current.confidence === 'fallback' ? ' (fallback)' : '');
-        }
+        renderCurrentHeader(card);
 
         loadHistory(channel, brand, days).then((j) => {
-          const points = j.points || [];
+          const points = seriesToPoints(j.series || []);
+          // 头部 stats 缓存：first_value / last_value 留给 header 用
+          if (j.stats && j.stats.first_value != null) {
+            cardState[channel] = cardState[channel] || {};
+            cardState[channel].historyHead = {
+              first_date: j.stats.first_date,
+              last_date: j.stats.last_date,
+              first_value: j.stats.first_value,
+              last_value: j.stats.last_value,
+              delta: j.stats.delta,
+              delta_pct: j.stats.delta_pct,
+            };
+            // 重新刷一次 header，让涨跌展示区间涨跌幅
+            renderCurrentHeader(card);
+          }
           if (!charts[channel]) {
             charts[channel] = echarts.init(chartEl, null, { renderer: 'canvas' });
           }
-          const opt = makeChartOption({ title: meta.title, unit: meta.unit }, points);
+          const opt = makeChartOption({ title: meta.name || channel, unit: meta.unit }, points);
           charts[channel].setOption(opt, true);
         }).catch((err) => {
           console.error('history error', channel, err);
-          if (!charts[channel]) {
-            charts[channel] = echarts.init(chartEl, null, { renderer: 'canvas' });
-          }
-          charts[channel].setOption({
-            title: {
-              text: '数据获取失败: ' + (err.message || ''),
-              left: 'center',
-              top: 'middle',
-              textStyle: { color: '#888', fontSize: 14 },
-            },
-          }, true);
+          chartEl.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:13px">'
+            + '数据获取失败: ' + (err.message || '') + '</div>';
         });
       }
 
@@ -427,27 +583,77 @@
         const headerMeta = card.querySelector('.price-meta');
         const chartEl = card.querySelector('.gold-chart');
 
-        fetch('/api/gold/history?channel=smm&days=' + days).then((r) => r.json()).then((j) => {
-          if (!j.ok) throw new Error(j.error || 'smm history failed');
+        renderCurrentHeader(card);
+
+        loadHistory('smm', '', days).then((j) => {
           const seriesData = j.series || [];
+          // 旧版服务端 / 没有多品牌接口：series 为空数组
+          if (!seriesData.length) {
+            loadSmmClientFallback(days).then((fallback) => {
+              if (fallback && fallback.series.length) {
+                // 客户端聚合成功，照常渲染（用 swr 旧值可能也会触发，但这里有数据就不再走空分支）
+                if (!charts.smm) {
+                  charts.smm = echarts.init(chartEl, null, { renderer: 'canvas' });
+                }
+                charts.smm.setOption(
+                  makeMultiSeriesOption({ title: '金店挂牌价' }, fallback.series), true);
+                if (fallback.stats && fallback.stats.first_value != null) {
+                  cardState.smm = cardState.smm || {};
+                  cardState.smm.historyHead = {
+                    first_date: fallback.stats.first_date,
+                    last_date: fallback.stats.last_date,
+                    first_value: fallback.stats.first_value,
+                    last_value: fallback.stats.last_value,
+                    delta: fallback.stats.delta,
+                    delta_pct: fallback.stats.delta_pct,
+                  };
+                  renderCurrentHeader(card);
+                }
+                headerMeta.textContent = '客户端聚合 · ' + fallback.series.length + ' 品牌（服务端未升级）';
+              } else {
+                showChartEmpty(chartEl, '暂无金店挂牌价数据，请点击「立即刷新」重试');
+              }
+            }).catch(() => {
+              showChartEmpty(chartEl, '暂无金店挂牌价数据，请点击「立即刷新」重试');
+            });
+            return;
+          }
+          // 头部 stats 缓存：让 header 显示区间涨跌幅
+          if (j.stats && j.stats.first_value != null) {
+            cardState.smm = cardState.smm || {};
+            cardState.smm.historyHead = {
+              first_date: j.stats.first_date,
+              last_date: j.stats.last_date,
+              first_value: j.stats.first_value,
+              last_value: j.stats.last_value,
+              delta: j.stats.delta,
+              delta_pct: j.stats.delta_pct,
+            };
+            // 重新刷一次 header，让涨跌展示区间涨跌幅
+            renderCurrentHeader(card);
+          }
           if (!charts.smm) {
             charts.smm = echarts.init(chartEl, null, { renderer: 'canvas' });
           }
-          const opt = makeMultiSeriesOption({ title: '金店挂牌价' }, seriesData);
-          charts.smm.setOption(opt, true);
+          charts.smm.setOption(makeMultiSeriesOption({ title: '金店挂牌价' }, seriesData), true);
 
           // 头部汇总：列出最新一日各品牌价
           if (seriesData.length) {
-            const lastDate = seriesData[0].points.length ? seriesData[0].points[seriesData[0].points.length - 1][0] : '';
+            // 不同品牌的最后一日可能略有差异，整体取最大 last_date
+            const lastDates = seriesData
+              .map((s) => (s.points && s.points.length ? s.points[s.points.length - 1][0] : ''))
+              .filter(Boolean);
+            const lastDate = lastDates.length ? lastDates.reduce((a, b) => (a > b ? a : b)) : '';
             const summary = seriesData.map((s) => {
-              const last = s.points.length ? s.points[s.points.length - 1][1] : null;
+              const last = s.points && s.points.length ? s.points[s.points.length - 1][1] : null;
               return s.brand + ':' + (last == null ? '--' : fmtNumber(last, 0));
             }).join('  ·  ');
-            headerMeta.textContent = (lastDate ? lastDate + ' · ' : '') + summary;
+            headerMeta.textContent = '共 ' + seriesData.length + ' 品牌' + (lastDate ? ' · ' + lastDate : '') + ' · ' + summary;
           }
         }).catch((err) => {
           console.error('smm history error', err);
-          headerMeta.textContent = '数据获取失败: ' + err.message;
+          chartEl.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:13px">'
+            + '数据获取失败: ' + (err.message || '') + '</div>';
         });
       }
 
@@ -495,10 +701,7 @@
         document.getElementById('refresh-btn').addEventListener('click', () => {
           fetch('/api/gold/refresh', { method: 'POST' })
             .then((r) => r.json())
-            .then((j) => {
-              console.log('refresh', j);
-              renderAll();
-            })
+            .then(() => renderAll())
             .catch((e) => console.error('refresh err', e));
         });
       }
@@ -510,29 +713,90 @@
           return;
         }
         el.innerHTML = channels.map((c) => {
-          const dot = c.status === 'ok' ? 'ok' : (c.status === 'fallback' ? 'fallback' : 'fail');
-          const title = c.title || c.channel;
-          const updated = c.last_update || '--';
+          const status = c.last_status || 'fail';
+          const dot = status === 'ok' ? 'ok' : (status === 'fallback' ? 'fallback' : 'fail');
+          const title = c.name || c.channel;
+          const updated = c.last_run_at || '--';
           return '<span><span class="dot ' + dot + '"></span>' + title + ' · ' + updated + '</span>';
         }).join('');
       }
 
+      function ingestCurrent(j) {
+        const channels = j.channels || {};
+        Object.keys(channels).forEach((k) => { currentByCh[k] = channels[k]; });
+      }
+
+      function ingestChannels(j) {
+        const chs = j.channels || [];
+        chs.forEach((c) => {
+          cardState[c.channel] = Object.assign({}, cardState[c.channel] || {}, c);
+        });
+        renderSourceStatus(chs);
+      }
+
+      function ingestHistoryStats(j) {
+        if (!j || !j.channel || !j.stats) return;
+        const ch = j.channel;
+        cardState[ch] = cardState[ch] || {};
+        cardState[ch].historyHead = {
+          first_date: j.stats.first_date,
+          last_date: j.stats.last_date,
+          first_value: j.stats.first_value,
+          last_value: j.stats.last_value,
+          delta: j.stats.delta,
+          delta_pct: j.stats.delta_pct,
+        };
+      }
+
+      function round2(n) {
+        return Math.round(Number(n) * 100) / 100;
+      }
+
+      function whenEchartsReady(cb) {
+        if (window.echarts) return cb();
+        const start = Date.now();
+        const wait = setInterval(() => {
+          if (window.echarts) { clearInterval(wait); cb(); }
+          else if (Date.now() - start > 15000) {
+            clearInterval(wait);
+            console.error('echarts failed to load');
+          }
+        }, 50);
+      }
+
+      // 上报自身状态给父页 index.html（修顶部"连接中…"一直停留的问题）
+      function reportStatus(text) {
+        try {
+          parent.postMessage({ type: 'child-status', text: String(text) }, '*');
+        } catch (_) { /* 父页不存在时（直接打开 gold.html）静默 */ }
+      }
+
+      // 在 chart 容器内显示"暂无数据"占位，避免空 series 渲染成只看到坐标轴
+      function showChartEmpty(el, msg) {
+        if (el) el.innerHTML = '<div style="padding:32px 24px;color:var(--muted);font-size:13px;text-align:center">'
+          + (msg || '暂无数据，请点击「立即刷新」重试') + '</div>';
+      }
+
       function boot() {
         setupBindings();
-        loadChannels().then((j) => {
-          const chs = j.channels || [];
-          chs.forEach((c) => { cardState[c.channel] = c; });
-          renderSourceStatus(chs);
-          renderAll();
-        }).catch((e) => console.error('channels err', e));
-        setInterval(() => {
-          loadChannels().then((j) => {
-            const chs = j.channels || [];
-            chs.forEach((c) => { cardState[c.channel] = c; });
-            renderSourceStatus(chs);
-            renderAll();
-          }).catch(() => {});
-        }, REFRESH_INTERVAL_MS);
+        reportStatus('连接中…');
+        whenEchartsReady(() => {
+          // 单次完整刷新（含 ch / current / 4 张 history）
+          async function refreshOnce() {
+            try {
+              const [chs, cur] = await Promise.all([loadChannels(), loadCurrent()]);
+              ingestChannels(chs);
+              ingestCurrent(cur);
+              renderAll();
+              reportStatus('在线 · ' + new Date().toLocaleTimeString());
+            } catch (e) {
+              console.error('refresh err', e);
+              reportStatus('服务不可用：' + (e.message || e));
+            }
+          }
+          refreshOnce();
+          setInterval(refreshOnce, REFRESH_INTERVAL_MS);
+        });
         window.addEventListener('resize', () => {
           Object.values(charts).forEach((c) => c && c.resize && c.resize());
         });

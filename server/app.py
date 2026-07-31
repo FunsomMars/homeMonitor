@@ -14,6 +14,12 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .gold_format import CHANNELS, build_channels_meta, build_current, build_history_series
+from .oil_format import (
+    build_current as oil_build_current,
+    build_history_series as oil_build_history,
+    load_seed_adjustments,
+    load_seed_map,
+)
 from .gold_store import DEFAULT_DB as DEFAULT_GOLD_DB, GoldStore
 from .xiaomi_mjwsd06 import decode_advertisement
 
@@ -357,11 +363,33 @@ class Handler(BaseHTTPRequestHandler):
             return json_response(self, {"readings": self.store.readings(hours, address), "hours": hours})
         if parsed.path == "/api/advertisements":
             return json_response(self, {"advertisements": self.store.recent_advertisements()})
+        # ---- 油价监控 ----
+        if parsed.path == "/api/oil/current":
+            province = query.get("province", ["江苏"])[0]
+            return json_response(self, oil_build_current(province))
+        if parsed.path == "/api/oil/history":
+            province = query.get("province", ["江苏"])[0]
+            fuel = query.get("type", ["92"])[0]
+            try:
+                days = min(max(int(query.get("days", ["365"])[0]), 0), 3650)
+            except ValueError:
+                days = 365
+            return json_response(self, oil_build_history(province, fuel, days))
+        if parsed.path == "/api/oil/adjustments":
+            try:
+                limit = min(max(int(query.get("limit", ["10"])[0]), 1), 100)
+            except ValueError:
+                limit = 10
+            return json_response(self, {"events": load_seed_adjustments()[:limit]})
+        if parsed.path == "/api/oil/map":
+            return json_response(self, load_seed_map())
         # ---- 黄金监控 ----
         if parsed.path == "/api/gold/current":
             return json_response(self, build_current())
         if parsed.path == "/api/gold/channels":
-            return json_response(self, build_channels_meta())
+            return json_response(self, build_channels_meta(
+                source_status=self.store.gold.source_status(),
+            ))
         if parsed.path == "/api/gold/history":
             channel = query.get("channel", ["sge"])[0]
             if channel not in CHANNELS:
@@ -373,14 +401,53 @@ class Handler(BaseHTTPRequestHandler):
                 days = 365
             days = max(0, min(days, 3650))
             # 优先用 DB 真实历史；空时回退 seed
-            db_series = self.store.gold.history(channel, brand, days)
-            if not db_series:
+            from server.gold_format import CHANNEL_META as _gold_meta
+            meta = _gold_meta[channel]
+            is_multi = (channel == "smm" and not brand)
+            if is_multi:
+                db_multi = self.store.gold.history_multi_brand("smm", days)
+            else:
+                db_series = self.store.gold.history(channel, brand, days)
+            if is_multi and not db_multi:
                 from server.gold_format import load_seed_history as _seed_loader
                 seed_hist = _seed_loader()
                 payload = build_history_series(channel, brand, days, seed_history=seed_hist)
+            elif not is_multi and not db_series:
+                from server.gold_format import load_seed_history as _seed_loader
+                seed_hist = _seed_loader()
+                payload = build_history_series(channel, brand, days, seed_history=seed_hist)
+            elif is_multi:
+                # DB 多品牌：自行计算 stats（按品牌最后一日均价）
+                last_date = max((s["points"][-1][0] for s in db_multi if s["points"]), default=None)
+                first_date = min((s["points"][0][0] for s in db_multi if s["points"]), default=None)
+                stats = None
+                if last_date and first_date:
+                    vals_last = [s["points"][-1][1] for s in db_multi if s["points"] and s["points"][-1][0] == last_date]
+                    vals_first = [s["points"][0][1] for s in db_multi if s["points"] and s["points"][0][0] == first_date]
+                    if vals_last and vals_first:
+                        avg_last = round(sum(vals_last) / len(vals_last), 2)
+                        avg_first = round(sum(vals_first) / len(vals_first), 2)
+                        delta = round(avg_last - avg_first, 2)
+                        delta_pct = round(delta / avg_first * 100, 2) if avg_first else 0
+                        stats = {
+                            "first_date": first_date,
+                            "last_date": last_date,
+                            "first_value": avg_first,
+                            "last_value": avg_last,
+                            "delta": delta,
+                            "delta_pct": delta_pct,
+                        }
+                payload = {
+                    "channel": channel,
+                    "brand": "",
+                    "name": meta["name"],
+                    "unit": meta["unit"],
+                    "kind": meta["kind"],
+                    "days": days,
+                    "series": db_multi,
+                    "stats": stats,
+                }
             else:
-                from server.gold_format import CHANNEL_META as _gold_meta
-                meta = _gold_meta[channel]
                 stats = None
                 if db_series:
                     first, last = db_series[0], db_series[-1]
@@ -399,6 +466,7 @@ class Handler(BaseHTTPRequestHandler):
                     "brand": brand,
                     "name": meta["name"],
                     "unit": meta["unit"],
+                    "kind": meta["kind"],
                     "days": days,
                     "series": db_series,
                     "stats": stats,
@@ -500,7 +568,15 @@ class Handler(BaseHTTPRequestHandler):
         return json_response(self, {"ok": True, "proxy_id": proxy_id, "accepted": accepted})
 
     def _static(self, path: str):
-        relative = "index.html" if path in {"", "/"} else path.lstrip("/")
+        pages = {
+            "": "index.html",
+            "/": "index.html",
+            "/dashboard": "index.html",
+            "/temp": "temp.html",
+            "/oil": "oil.html",
+            "/gold": "gold.html",
+        }
+        relative = pages.get(path, path.lstrip("/"))
         target = (WEB_ROOT / relative).resolve()
         if WEB_ROOT not in target.parents or not target.is_file():
             return json_response(self, {"error": "not found"}, 404)
@@ -510,6 +586,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        # .js / .css 加短期缓存，浏览器二次访问免请求；HTML 强制 no-cache 避免 iframe 拿旧版
+        if target.suffix in (".js", ".css"):
+            self.send_header("Cache-Control", "public, max-age=3600")
+        elif target.suffix == ".html":
+            self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(data)
 
@@ -535,6 +616,7 @@ def main():
     store = Store(args.db, args.config, ingest_token=args.ingest_token,
                   gold_db_path=args.gold_db)
     readers: list[threading.Thread] = []
+    sched = None  # 后台黄金调度器（不一定启动）
     if args.demo:
         readers.append(DemoReader(store))
     else:
@@ -558,7 +640,8 @@ def main():
         from .gold_fetcher.scheduler import GoldScheduler
         sched = GoldScheduler(store.gold)
         sched.start()
-        readers.append(sched)
+        # 已在上面 start()，不能再 append 到 readers（for 循环会重复 start 触发 RuntimeError）
+        # 用单独的变量追踪，shutdown 时停止
     for reader in readers:
         reader.start()
     Handler.store = store
@@ -575,6 +658,8 @@ def main():
         for reader in readers:
             if hasattr(reader, "stop_event"):
                 reader.stop_event.set()
+        if sched is not None and hasattr(sched, "stop_event"):
+            sched.stop_event.set()
 
 
 if __name__ == "__main__":

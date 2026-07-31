@@ -9,8 +9,17 @@
     html, body { height: 100%; }
     body { overflow: auto; }
     main { max-width: none; margin: 0; padding: 0; }
+    /* 油价页背景与 gold.html 一致：覆盖 common.css 的 --bg 偏绿色 (#f3f6f5) */
+    :root { --bg: #ffffff; }
+    body { background: var(--bg); }
+    /* 最近一次调价卡：压缩上下留白，字号也略小一档 */
+    #adjustCard { padding: 10px 14px; }
+    #adjustCard .metrics { gap: 18px; margin-top: 6px; }
+    #adjustCard .metric strong { font-size: 22px; }
+    #adjustCard #adjMeta { margin-top: 4px; font-size: 12px; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js" defer></script>
+  <!-- ECharts 本地化：避免无外网时图表库加载失败 -->
+  <script src="/vendor/echarts.min.js" defer></script>
 </head>
 <body>
 <main>
@@ -68,7 +77,7 @@
     </section>
   </div>
 
-  <footer>数据源：江苏省发改委 / 国家发改委 / 东方财富（带 seed 兜底）。页面每 30 秒刷新一次。</footer>
+  <footer>数据源：江苏省发改委 / 国家发改委 / 东方财富。页面每 30 秒刷新一次。</footer>
 </main>
 <script src="/common.js"></script>
 <script>
@@ -76,6 +85,17 @@ const PROVINCES = ["北京","天津","河北","山西","内蒙古","辽宁","吉
 let state = { province: '江苏', fuel: '92', days: 365 };
 
 const $ = id => document.getElementById(id);
+
+// 来源字段中文化：内部标识 → 用户能看懂的中文标签
+const SOURCE_LABEL = {
+  jsfgw: '江苏省发改委',
+  national_fgw: '国家发改委',
+  eastmoney: '东方财富',
+};
+function fmtSource(s) {
+  if (!s || s === 'seed') return '';
+  return SOURCE_LABEL[s] || s;
+}
 
 // 初始化省份下拉
 $('province').innerHTML = PROVINCES.map(p => `<option value="${p}"${p===state.province?' selected':''}>${p}</option>`).join('');
@@ -105,7 +125,7 @@ async function loadCurrent() {
     <div class="fuel-item confidence-${HM.esc(it.confidence || 'official')}">
       <div class="label">${HM.esc(it.type)}# 汽油${it.type === '0' ? '（柴油）' : ''}</div>
       <div class="price">${Number(it.price).toFixed(2)} <small style="font-size:14px;color:var(--muted)">元/升</small></div>
-      <div class="meta">生效 ${HM.fmtTime(it.effective_at)} · 来源 ${HM.esc(it.source)}</div>
+      <div class="meta">生效 ${HM.fmtTime(it.effective_at)}${fmtSource(it.source) ? ' · 来源 ' + HM.esc(fmtSource(it.source)) : ''}</div>
     </div>
   `).join('') || '<div class="empty">暂无数据</div>';
 
@@ -140,7 +160,8 @@ async function loadHistory() {
     grid: { left: 50, right: 20, top: 30, bottom: 50 },
     xAxis: { type: 'category', data: (data.series || []).map(p => p.date), axisLabel: { rotate: 30 } },
     yAxis: { type: 'value', name: '元/升', scale: true },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 18 }],
+    // 仅保留鼠标滚轮缩放（inside），去掉底部蓝条 slider 保持清爽
+    dataZoom: [{ type: 'inside' }],
     series: [{
       name: state.fuel + '#', type: 'line', smooth: true, data: adjSeries,
       lineStyle: { width: 2, color: '#167c80' },
@@ -166,7 +187,7 @@ async function loadAdjustments() {
       <td>${HM.fmtTime(e.effective_at)}</td>
       <td class="${e.gasoline_change>=0?'up':'down'}">${e.gasoline_change>=0?'+':''}${e.gasoline_change}</td>
       <td class="${e.diesel_change>=0?'up':'down'}">${e.diesel_change>=0?'+':''}${e.diesel_change}</td>
-      <td>${HM.esc(e.source)}</td>
+      <td>${HM.esc(fmtSource(e.source) || '—')}</td>
     </tr>
   `).join('') || '<tr><td colspan="4" class="empty">暂无调价记录</td></tr>';
   if (evs.length) {
@@ -175,11 +196,22 @@ async function loadAdjustments() {
     $('adjGasoline').className = a.gasoline_change >= 0 ? 'up' : 'down';
     $('adjDiesel').textContent = (a.diesel_change >= 0 ? '+' : '') + a.diesel_change;
     $('adjDiesel').className = a.diesel_change >= 0 ? 'up' : 'down';
-    $('adjMeta').textContent = `生效 ${HM.fmtTime(a.effective_at)} · 来源 ${HM.esc(a.source)}${a.notice_url ? ' · ' + HM.esc(a.notice_url) : ''}`;
+    $('adjMeta').textContent = `生效 ${HM.fmtTime(a.effective_at)}${fmtSource(a.source) ? ' · 来源 ' + HM.esc(fmtSource(a.source)) : ''}${a.notice_url ? ' · ' + HM.esc(a.notice_url) : ''}`;
   }
 }
 
 // ---------- 地图 ----------
+// Aliyun GeoJSON 用全称（如"北京市"），但 API 数据用简称（如"北京"），按名匹配会全 NaN。
+const MAP_NAME_MAP = {
+  "北京": "北京市", "天津": "天津市", "河北": "河北省", "山西": "山西省",
+  "内蒙古": "内蒙古自治区", "辽宁": "辽宁省", "吉林": "吉林省", "黑龙江": "黑龙江省",
+  "上海": "上海市", "江苏": "江苏省", "浙江": "浙江省", "安徽": "安徽省",
+  "福建": "福建省", "江西": "江西省", "山东": "山东省", "河南": "河南省",
+  "湖北": "湖北省", "湖南": "湖南省", "广东": "广东省", "广西": "广西壮族自治区",
+  "海南": "海南省", "重庆": "重庆市", "四川": "四川省", "贵州": "贵州省",
+  "云南": "云南省", "西藏": "西藏自治区", "陕西": "陕西省", "甘肃": "甘肃省",
+  "青海": "青海省", "宁夏": "宁夏回族自治区", "新疆": "新疆维吾尔自治区",
+};
 let mapChart;
 async function loadMap() {
   let data;
@@ -189,6 +221,7 @@ async function loadMap() {
   if (!data || !data.data) return;
   if (!mapChart) mapChart = echarts.init($('map'));
   mapChart.setOption({
+    backgroundColor: '#ffffff',
     tooltip: { trigger: 'item', formatter: p => `${p.name}<br/>${p.value ?? '—'} 元/升` },
     visualMap: {
       min: data.min, max: data.max, left: 20, bottom: 20,
@@ -197,14 +230,15 @@ async function loadMap() {
     },
     series: [{
       name: '92#', type: 'map', map: 'china',
-      data: data.data.map(d => ({ name: d.name, value: d.value })),
+      data: data.data.map(d => ({ name: MAP_NAME_MAP[d.name] || d.name, value: d.value })),
+      itemStyle: { areaColor: '#fafafa', borderColor: '#bbb' },
     }],
   });
 }
 // ECharts 地图需要 china GeoJSON；通过脚本动态注册
 function registerChinaMap() {
   if (window.__chinaRegistered) return;
-  fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json')
+  fetch('/geo/china.json')
     .then(r => r.json())
     .then(geo => { echarts.registerMap('china', geo); window.__chinaRegistered = true; loadMap(); })
     .catch(() => { $('map').innerHTML = '<div class="empty">地图数据加载失败</div>'; });
@@ -219,15 +253,24 @@ async function refreshAll() {
   }
 }
 
-if (window.echarts) {
-  registerChinaMap();
-} else {
+// echarts.min.js 用 defer 加载，本内联脚本执行时它还没就绪。
+// 必须等 echarts 可用后再注册地图、首屏拉数据、开轮询；否则 echarts.init 会 ReferenceError。
+function whenEchartsReady(cb) {
+  if (window.echarts) return cb();
+  const start = Date.now();
   const wait = setInterval(() => {
-    if (window.echarts) { clearInterval(wait); registerChinaMap(); }
-  }, 100);
+    if (window.echarts) { clearInterval(wait); cb(); }
+    else if (Date.now() - start > 15000) {
+      clearInterval(wait);
+      parent.postMessage({ type: 'child-status', text: '图表库加载失败' }, '*');
+    }
+  }, 50);
 }
-refreshAll();
-setInterval(refreshAll, 30000);
+whenEchartsReady(() => {
+  registerChinaMap();
+  refreshAll();
+  setInterval(refreshAll, 30000);
+});
 addEventListener('resize', () => { chart && chart.resize(); mapChart && mapChart.resize(); });
 </script>
 </body>

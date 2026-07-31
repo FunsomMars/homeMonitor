@@ -14,3 +14,6 @@ config/*.secret.json
 
 # Local OpenCode / IDE assistant configuration
 opencode.json
+
+# Claude Code local worktree metadata
+.claude/

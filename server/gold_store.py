@@ -214,6 +214,53 @@ class GoldStore:
                 ).fetchall()
         return [{"date": r["effective_at"][:10], "value": r["price"]} for r in rows]
 
+    def history_multi_brand(self, channel: str, days: int) -> list[dict]:
+        """SMM 多品牌专用：返回 ``[{brand, points: [[date, value], ...]}, ...]``。
+
+        每个 brand 内部按 ``effective_at`` 升序；空 brand 列表会被丢弃。
+        """
+        if channel not in CHANNELS:
+            return []
+        with self.lock:
+            brand_rows = self.db.execute(
+                "SELECT DISTINCT brand FROM gold_history WHERE channel=? AND brand<>'' ORDER BY brand ASC",
+                (channel,),
+            ).fetchall()
+            brands = [r["brand"] for r in brand_rows]
+            out: list[dict] = []
+            for bname in brands:
+                if days > 0:
+                    last = self.db.execute(
+                        "SELECT MAX(effective_at) AS m FROM gold_history WHERE channel=? AND brand=?",
+                        (channel, bname),
+                    ).fetchone()
+                    last_dt = None
+                    if last and last["m"]:
+                        try:
+                            last_dt = datetime.fromisoformat(last["m"])
+                        except ValueError:
+                            last_dt = None
+                    if last_dt:
+                        cutoff = (last_dt - timedelta(days=days)).isoformat(timespec="seconds")
+                        rows = self.db.execute(
+                            "SELECT effective_at, price FROM gold_history "
+                            "WHERE channel=? AND brand=? AND effective_at >= ? "
+                            "ORDER BY effective_at ASC",
+                            (channel, bname, cutoff),
+                        ).fetchall()
+                    else:
+                        rows = []
+                else:
+                    rows = self.db.execute(
+                        "SELECT effective_at, price FROM gold_history "
+                        "WHERE channel=? AND brand=? ORDER BY effective_at ASC",
+                        (channel, bname),
+                    ).fetchall()
+                points = [[r["effective_at"][:10], r["price"]] for r in rows]
+                if points:
+                    out.append({"brand": bname, "points": points})
+        return out
+
     def channels_meta(self) -> list[dict]:
         with self.lock:
             sources = {r["id"]: dict(r) for r in self.db.execute(
