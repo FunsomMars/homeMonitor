@@ -102,25 +102,8 @@ class GoldScheduler(threading.Thread):
 
     # ingest：根据 fetcher.name 走对应纯函数拿到 rows，再写 DB
     def _ingest(self, name: str, result: FetchResult) -> int:
-        # result.rows 只是计数；要写 DB 需要原始 payload。
-        # 这里借助 fetcher 上挂的私有 HTTP helper 重新拿一次结果并解析。
-        # 但为了不破坏 Protocol 契约，我们重新 fetch 后保留 rows。
-        # 简化做法：直接调用 fetcher.fetch() 拿一次 payloads 已有的 fetcher 内的 last_payload
-        fetcher = build_fetcher(name)
-        if name == "sge":
-            from server.gold_fetcher.sge import _http_get, LIST_URL
-            rows = parse_sge_rows(_http_get(LIST_URL))
-        elif name == "shfe":
-            from server.gold_fetcher.shfe import _http_get, LIST_URL
-            rows = parse_shfe_rows(_http_get(LIST_URL))
-        elif name == "yahoo":
-            from server.gold_fetcher.yahoo import _http_get, build_url
-            rows = parse_yahoo_rows(_http_get(build_url()))
-        elif name == "smm":
-            from server.gold_fetcher.smm import _http_get, LIST_URL
-            rows = parse_smm_rows(_http_get(LIST_URL))
-        else:
-            return 0
+        # Fetcher 已经完成抓取和解析，直接写入同一批结果，避免重复请求。
+        rows = result.data
         n = 0
         for r in rows:
             # current upsert

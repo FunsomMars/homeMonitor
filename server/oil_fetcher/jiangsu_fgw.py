@@ -23,21 +23,27 @@ import logging
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime
+from urllib.parse import urljoin
 
 from server.oil_format import FetchResult
 from server.oil_fetcher import Fetcher
 
 logger = logging.getLogger(__name__)
 
-LIST_URL = "https://fzggw.jiangsu.gov.cn/"
+LIST_URL = "http://fg.suzhou.gov.cn/"
 HTTP_TIMEOUT = 8
+DETAIL_LINK_RE = re.compile(
+    r'<a[^>]+href="(?P<href>[^"]+)"[^>]*>\s*江苏省成品油价格调整公告[^<]*</a>',
+    re.IGNORECASE,
+)
 PROVINCE = "江苏"
 
 FUEL_NAME_PATTERNS: dict[str, re.Pattern[str]] = {
-    "92": re.compile(r"92\s*号?\s*汽油"),
-    "95": re.compile(r"95\s*号?\s*汽油"),
-    "98": re.compile(r"98\s*号?\s*汽油"),
-    "0":  re.compile(r"0\s*号?\s*柴油"),
+    "92": re.compile(r"92\s*(?:号|#)?[^0-9]{0,12}汽油"),
+    "95": re.compile(r"95\s*(?:号|#)?[^0-9]{0,12}汽油"),
+    "98": re.compile(r"98\s*(?:号|#)?[^0-9]{0,12}汽油"),
+    "0":  re.compile(r"0\s*(?:号|#)?[^0-9]{0,12}柴油"),
 }
 
 
@@ -64,16 +70,33 @@ def parse_price_table(html: str) -> dict:
         cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.IGNORECASE | re.DOTALL)
         if len(cells) < 2:
             continue
-        name = re.sub(r"\s+", "", cells[0])
-        price_txt = re.sub(r"<[^>]+>", "", cells[1]).strip()
+        name = re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", cells[0]))
+        price_candidates = []
+        for cell in cells[1:]:
+            price_txt = re.sub(r"<[^>]+>", "", cell).strip().replace(",", "")
+            try:
+                price_candidates.append(float(price_txt))
+            except ValueError:
+                continue
+        price = next((p for p in price_candidates if 3.0 <= p <= 20.0), None)
+        if price is None:
+            continue
         for fuel, pat in FUEL_NAME_PATTERNS.items():
             if pat.search(name):
-                price = float(price_txt)
-                items.append({"fuel_type": fuel, "price": price})
+                items.append({"fuel_type": fuel, "price": round(price, 2)})
                 break
     if not items:
         raise ValueError("no recognized fuel rows in table")
-    return {"province": PROVINCE, "items": items}
+    return {"province": PROVINCE, "items": items, "effective_at": parse_effective_at(html)}
+
+
+def parse_effective_at(html: str) -> str | None:
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    text = re.sub(r"\s+", "", text)
+    m = re.search(r"自(\d{4})年(\d{1,2})月(\d{1,2})日24时起", text)
+    if not m:
+        return None
+    return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}T00:00:00+08:00"
 
 
 class JiangsuFGWCurrentFetcher:
@@ -85,14 +108,25 @@ class JiangsuFGWCurrentFetcher:
 
     def fetch(self) -> FetchResult:
         try:
-            html = _http_get(self.url)
+            listing = _http_get(self.url)
+            match = DETAIL_LINK_RE.search(listing)
+            if not match:
+                return FetchResult(source=self.name, ok=False, error="no latest announcement")
+            detail_url = urljoin(self.url, match.group("href"))
+            html = _http_get(detail_url)
         except (urllib.error.URLError, TimeoutError) as exc:
             return FetchResult(source=self.name, ok=False, error=f"http: {exc}")
         try:
             parsed = parse_price_table(html)
         except ValueError as exc:
             return FetchResult(source=self.name, ok=False, error=str(exc))
-        return FetchResult(source=self.name, ok=True, rows=len(parsed["items"]))
+        effective_at = parsed.get("effective_at") or datetime.now().astimezone().isoformat(timespec="seconds")
+        rows = [
+            {**item, "province": PROVINCE, "effective_at": effective_at, "source": self.name}
+            for item in parsed["items"]
+        ]
+        return FetchResult(source=self.name, ok=bool(rows), rows=len(rows), data=rows,
+                           error=None if rows else "no recognized fuel rows")
 
 
-__all__ = ["JiangsuFGWCurrentFetcher", "parse_price_table", "PROVINCE"]
+__all__ = ["JiangsuFGWCurrentFetcher", "parse_price_table", "parse_effective_at", "PROVINCE"]

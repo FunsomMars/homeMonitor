@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -24,7 +25,7 @@ CHANNEL_META: dict[str, dict] = {
 PRICE_RANGE = {
     "sge":   (200.0, 900.0),    # 元/克
     "shfe":  (200.0, 900.0),
-    "yahoo": (1000.0, 4000.0),  # 美元/盎司
+    "yahoo": (1000.0, 10000.0),  # 美元/盎司
     "smm":   (400.0, 1500.0),   # 元/克（金店零售挂牌含工费）
 }
 
@@ -343,11 +344,13 @@ def build_channels_meta(seed_history=None, source_status: dict | None = None) ->
 class FetchResult:
     """与 server.oil_format.FetchResult 同结构，便于上层统一处理。"""
 
-    def __init__(self, source: str, ok: bool, rows: int = 0, error: str | None = None):
+    def __init__(self, source: str, ok: bool, rows: int = 0,
+                 error: str | None = None, data: list[dict] | None = None):
         self.source = source
         self.ok = ok
         self.rows = rows
         self.error = error
+        self.data = data or []
 
 
 # ---------- 4 个 channel 的纯函数解析器 ----------
@@ -472,16 +475,39 @@ def parse_yahoo_csv(csv_text: str) -> list[dict]:
     return out
 
 
+def parse_yahoo_chart(payload: dict) -> list[dict]:
+    """解析 Yahoo Finance chart JSON（下载 CSV 接口需要 cookie/token）。"""
+    try:
+        result = (payload.get("chart", {}).get("result") or [])[0]
+        timestamps = result.get("timestamp") or []
+        closes = (result.get("indicators", {}).get("quote") or [])[0].get("close") or []
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return []
+    out: list[dict] = []
+    for ts, close in zip(timestamps, closes):
+        if close is None or not _valid_price("yahoo", close):
+            continue
+        try:
+            dt = datetime.fromtimestamp(float(ts)).astimezone()
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+        out.append({
+            "brand": "",
+            "price": round(float(close), 2),
+            "effective_at": dt.isoformat(timespec="seconds"),
+        })
+    out.sort(key=lambda r: r["effective_at"])
+    return out
+
+
 # SMM 聚合页 HTML：每品牌独立块，含品牌名 + 当日挂牌价（元/克）
 _BRAND_NAMES = (
     "周大福", "老凤祥", "周生生", "中国黄金", "潮宏基",
     "六福珠宝", "老庙黄金", "菜百首饰", "谢瑞麟",
     "周大生", "中国珠宝",
 )
-_BRAND_ROW_RE = re.compile(
-    r"<tr[^>]*>\s*<td[^>]*>\s*(?P<brand>" + "|".join(re.escape(b) for b in _BRAND_NAMES) + r")\s*</td>\s*<td[^>]*>\s*(?P<price>[\d.]+)\s*</td",
-    re.IGNORECASE,
-)
+def _cell_text(cell: str) -> str:
+    return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cell))).strip()
 
 
 def parse_smm_html(html: str) -> list[dict]:
@@ -493,21 +519,38 @@ def parse_smm_html(html: str) -> list[dict]:
     out: list[dict] = []
     if not html:
         return []
-    eff_default = datetime.now().isoformat(timespec="seconds")
-    # 优先匹配 tr 行
-    for m in _BRAND_ROW_RE.finditer(html):
-        brand = m.group("brand")
-        try:
-            price = float(m.group("price"))
-        except ValueError:
+    eff_default = datetime.now().astimezone().isoformat(timespec="seconds")
+    seen: set[str] = set()
+    for tr in re.findall(r"<tr[^>]*>.*?</tr>", html, flags=re.IGNORECASE | re.DOTALL):
+        cells = [_cell_text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.IGNORECASE | re.DOTALL)]
+        if len(cells) < 2:
             continue
-        if not _valid_price("smm", price):
+        brand = next((b for b in _BRAND_NAMES if cells[0] == b), None)
+        if not brand or brand in seen:
             continue
-        out.append({"brand": brand, "price": round(price, 2), "effective_at": eff_default})
+        product = cells[1]
+        is_gold_product = bool(re.search(r"黄金|足金|金条|工艺金", product)) and not re.search(r"铂金|白金", product)
+        if not is_gold_product and not re.fullmatch(r"[\d,.]+", product):
+            continue
+        price = None
+        for cell in cells[1:]:
+            try:
+                candidate = float(cell.replace(",", ""))
+            except ValueError:
+                continue
+            if _valid_price("smm", candidate):
+                price = candidate
+                break
+        if price is None:
+            continue
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", " ".join(cells))
+        effective_at = date_match.group(1) + "T00:00:00+08:00" if date_match else eff_default
+        out.append({"brand": brand, "price": round(price, 2), "effective_at": effective_at})
+        seen.add(brand)
     if not out:
-        # 退路：在整 HTML 里按品牌名 + 数字 抓
+        # 退路：在整 HTML 里按品牌名 + 数字抓
         for brand in _BRAND_NAMES:
-            for m in re.finditer(re.escape(brand) + r"[^\d]{0,40}?(\d{3,5}(?:\.\d+)?)", html):
+            for m in re.finditer(re.escape(brand) + r"[^\d]{0,80}?(\d{3,5}(?:\.\d+)?)", html):
                 try:
                     price = float(m.group(1))
                 except ValueError:
@@ -540,5 +583,6 @@ __all__ = [
     "parse_sge_table",
     "parse_shfe_kx",
     "parse_yahoo_csv",
+    "parse_yahoo_chart",
     "parse_smm_html",
 ]

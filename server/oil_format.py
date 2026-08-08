@@ -205,8 +205,10 @@ def build_history_series(province: str, fuel: str, days: int, history_rows=None,
 # ----- 抓取协议 -----
 
 class FetchResult:
-    def __init__(self, source: str, ok: bool, rows: int = 0, error: str | None = None):
+    def __init__(self, source: str, ok: bool, rows: int = 0,
+                 error: str | None = None, data: list[dict] | None = None):
         self.source = source; self.ok = ok; self.rows = rows; self.error = error
+        self.data = data or []
 
 
 def parse_eastmoney_row(row: dict) -> dict | None:
@@ -229,13 +231,13 @@ def parse_eastmoney_row(row: dict) -> dict | None:
 # 2) "汽油、柴油价格每吨分别提高300元和290元"
 # 3) "汽柴油价格每吨分别降低145元和140元"
 _NUMBER = r"(\d+)"
-_GAS_UP = re.compile(r"汽油[^\d]{0,8}?提高\s*" + _NUMBER)
-_GAS_DN = re.compile(r"汽油[^\d]{0,8}?降低\s*" + _NUMBER)
-_DSL_UP = re.compile(r"柴油[^\d]{0,8}?提高\s*" + _NUMBER)
-_DSL_DN = re.compile(r"柴油[^\d]{0,8}?降低\s*" + _NUMBER)
+_GAS_UP = re.compile(r"汽油[^\d]{0,8}?(?:提高|上调)\s*" + _NUMBER)
+_GAS_DN = re.compile(r"汽油[^\d]{0,8}?(?:降低|下调)\s*" + _NUMBER)
+_DSL_UP = re.compile(r"柴油[^\d]{0,8}?(?:提高|上调)\s*" + _NUMBER)
+_DSL_DN = re.compile(r"柴油[^\d]{0,8}?(?:降低|下调)\s*" + _NUMBER)
 _PAIR = re.compile(
     r"(?:汽柴油|汽[、，]?柴油|汽油[、，]柴油)"
-    r"[^\d]{0,20}?(?:分别)?(?:提高|降低)\s*"
+    r"[^\d]{0,20}?(?:分别)?(?:提高|上调|降低|下调)\s*"
     r"(\d+)\s*元[^\d]{0,8}?(\d+)\s*元"
 )
 
@@ -246,11 +248,11 @@ def parse_adjust_notice(text: str) -> dict | None:
     # 优先匹配 "汽油、柴油 ... 300元 ... 290元" 格式
     pair = _PAIR.search(text)
     if pair:
-        sign = 1 if "提高" in text[max(0, pair.start() - 6):pair.end()] else -1
+        sign = 1 if any(word in text[max(0, pair.start() - 6):pair.end()] for word in ("提高", "上调")) else -1
         # sign 也要看是 提高 还是 降低 —— 重新检查
         # 在配对匹配范围内取方向
         around = text[max(0, pair.start() - 8):pair.end()]
-        sign = 1 if "提高" in around else -1
+        sign = 1 if "提高" in around or "上调" in around else -1
         return {"gasoline_change": sign * int(pair.group(1)),
                 "diesel_change": sign * int(pair.group(2))}
     # 否则按独立词匹配
@@ -258,6 +260,6 @@ def parse_adjust_notice(text: str) -> dict | None:
     dsl = _DSL_UP.search(text) or _DSL_DN.search(text)
     if not gas and not dsl:
         return None
-    gasoline_change = int(gas.group(1)) * (1 if "提高" in gas.group(0) else -1) if gas else 0
-    diesel_change = int(dsl.group(1)) * (1 if "提高" in dsl.group(0) else -1) if dsl else gasoline_change
+    gasoline_change = int(gas.group(1)) * (1 if "提高" in gas.group(0) or "上调" in gas.group(0) else -1) if gas else 0
+    diesel_change = int(dsl.group(1)) * (1 if "提高" in dsl.group(0) or "上调" in dsl.group(0) else -1) if dsl else gasoline_change
     return {"gasoline_change": gasoline_change, "diesel_change": diesel_change}

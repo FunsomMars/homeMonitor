@@ -16,7 +16,7 @@ from server.gold_format import (  # noqa: E402
     CHANNELS, CHANNEL_META,
     load_seed_history, load_seed_brands,
     build_current, build_history_series, build_channels_meta,
-    parse_sge_table, parse_shfe_kx, parse_yahoo_csv, parse_smm_html,
+    parse_sge_table, parse_shfe_kx, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
 )
 
 
@@ -82,6 +82,15 @@ SMM_HTML_DIV = """
 <div class="brand-row"><span class="brand">菜百首饰</span><span class="price">942.00</span></div>
 """
 
+SMM_HTML_NEW = """
+<table>
+  <tr><th>品牌</th><th>产品</th><th>价格</th><th>更新时间</th></tr>
+  <tr><td>中国黄金</td><td>999黄金</td><td>1255</td><td>2026-08-08</td></tr>
+  <tr><td>六福珠宝</td><td>黄金</td><td>1283</td><td>2026-08-08</td></tr>
+  <tr><td>周大福</td><td>PT950铂金</td><td>673</td><td>2026-08-08</td></tr>
+</table>
+"""
+
 
 class SgeParserTest(unittest.TestCase):
     def test_returns_primary_contract(self):
@@ -132,6 +141,16 @@ class ShfeParserTest(unittest.TestCase):
 
 
 class YahooParserTest(unittest.TestCase):
+    def test_parses_chart_json(self):
+        points = parse_yahoo_chart({
+            "chart": {"result": [{
+                "timestamp": [1783483200, 1783569600],
+                "indicators": {"quote": [{"close": [4155.1, 4145.3]}]},
+            }]}
+        })
+        self.assertEqual(len(points), 2)
+        self.assertAlmostEqual(points[-1]["price"], 4145.3)
+
     def test_parses_csv_to_points(self):
         points = parse_yahoo_csv(YAHOO_CSV)
         self.assertGreaterEqual(len(points), 5)
@@ -157,6 +176,13 @@ class YahooParserTest(unittest.TestCase):
 
 
 class SmmParserTest(unittest.TestCase):
+    def test_new_product_table_style(self):
+        rows = parse_smm_html(SMM_HTML_NEW)
+        prices = {r["brand"]: r["price"] for r in rows}
+        self.assertEqual(prices["中国黄金"], 1255)
+        self.assertEqual(prices["六福珠宝"], 1283)
+        self.assertNotIn("周大福", prices)
+
     def test_table_style(self):
         rows = parse_smm_html(SMM_HTML_TR)
         brands = {r["brand"] for r in rows}

@@ -78,7 +78,7 @@ class TestJiangsuFGWParser(unittest.TestCase):
         f = JiangsuFGWCurrentFetcher()
         self.assertEqual(f.name, "jiangsu_fgw")
         self.assertEqual(f.kind, "current")
-        self.assertEqual(f.url, "https://fzggw.jiangsu.gov.cn/")
+        self.assertEqual(f.url, "http://fg.suzhou.gov.cn/")
 
 
 class TestNationalFGW(unittest.TestCase):

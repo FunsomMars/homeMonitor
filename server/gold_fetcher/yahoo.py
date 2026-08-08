@@ -13,17 +13,18 @@ API：https://query1.finance.yahoo.com/v7/finance/download/GC=F?period1=...&peri
 from __future__ import annotations
 
 import http.client
+import json
 import logging
 import time
 import urllib.error
 import urllib.request
 
-from server.gold_format import FetchResult, parse_yahoo_csv
+from server.gold_format import FetchResult, parse_yahoo_chart
 
 logger = logging.getLogger(__name__)
 
 SYMBOL = "GC=F"
-HISTORY_URL = "https://query1.finance.yahoo.com/v7/finance/download/" + SYMBOL
+HISTORY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/" + SYMBOL
 HTTP_TIMEOUT = 8
 
 # 取近 1 年（Yahoo Finance 免费 API 最大返回窗口限制为 ~1y/单次）
@@ -31,28 +32,23 @@ DEFAULT_PERIOD_DAYS = 365
 
 
 def build_url(days: int = DEFAULT_PERIOD_DAYS) -> str:
-    now = int(time.time())
-    start = now - days * 24 * 3600
-    return (
-        HISTORY_URL
-        + f"?period1={start}&period2={now}"
-        + "&interval=1d&events=history&includeAdjustedClose=true"
-    )
+    return HISTORY_URL + f"?range={max(1, days)}d&interval=1d&events=history"
 
 
-def _http_get(url: str) -> str:
+def _http_get(url: str) -> dict:
     req = urllib.request.Request(
         url,
         headers={
             "User-Agent": "Mozilla/5.0 (homeMonitor-gold/1.0)",
-            "Accept": "text/csv",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://finance.yahoo.com/",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # noqa: S310
-            return resp.read().decode("utf-8", errors="replace")
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
     except http.client.IncompleteRead as exc:
-        return exc.partial.decode("utf-8", errors="replace")
+        return json.loads(exc.partial.decode("utf-8", errors="replace"))
 
 
 class YahooGoldFetcher:
@@ -64,14 +60,15 @@ class YahooGoldFetcher:
 
     def fetch(self) -> FetchResult:
         try:
-            csv_text = _http_get(build_url(self.days))
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            payload = _http_get(build_url(self.days))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             return FetchResult(source=self.name, ok=False, error=f"http: {exc}")
         try:
-            rows = parse_yahoo_csv(csv_text)
+            rows = parse_yahoo_chart(payload)
         except ValueError as exc:
             return FetchResult(source=self.name, ok=False, error=str(exc))
-        return FetchResult(source=self.name, ok=True, rows=len(rows))
+        return FetchResult(source=self.name, ok=bool(rows), rows=len(rows), data=rows,
+                           error=None if rows else "no quotation data")
 
 
 __all__ = ["YahooGoldFetcher", "build_url", "SYMBOL", "DEFAULT_PERIOD_DAYS"]

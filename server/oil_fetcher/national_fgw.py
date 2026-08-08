@@ -15,13 +15,15 @@ import logging
 import re
 import urllib.error
 import urllib.request
+from datetime import datetime
+from urllib.parse import urljoin
 
 from server.oil_format import FetchResult, parse_adjust_notice
 from server.oil_fetcher import Fetcher
 
 logger = logging.getLogger(__name__)
 
-LIST_URL = "https://www.ndrc.gov.cn/xwdt/xwfb/tztg/"
+LIST_URL = "https://www.ndrc.gov.cn/xwdt/xwfb/"
 HTTP_TIMEOUT = 8
 
 # 公告列表里通常是 <a href="...">标题</a>
@@ -61,8 +63,7 @@ class NationalFGWEventFetcher:
             return FetchResult(source=self.name, ok=True, rows=0)
 
         href = m.group("href")
-        if not href.startswith("http"):
-            href = "https://www.ndrc.gov.cn" + href if href.startswith("/") else href
+        href = urljoin(self.base_url, href)
         try:
             detail_html = _http_get(href)
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -73,7 +74,22 @@ class NationalFGWEventFetcher:
         parsed = parse_adjust_notice(text)
         if not parsed:
             return FetchResult(source=self.name, ok=False, error="parse failed")
-        return FetchResult(source=self.name, ok=True, rows=1, error=None)
+        effective = re.search(r"自(\d{4})年(\d{1,2})月(\d{1,2})日24时起", text)
+        if effective is None:
+            effective = re.search(r"自(\d{1,2})月(\d{1,2})日24时起", text)
+            title_date = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", m.group("title"))
+            if effective and title_date:
+                year, month, day = title_date.groups()[0], effective.group(1), effective.group(2)
+            else:
+                year = month = day = None
+        else:
+            year, month, day = effective.groups()
+        effective_at = (
+            f"{year}-{int(month):02d}-{int(day):02d}T00:00:00+08:00"
+            if year and month and day else datetime.now().astimezone().isoformat(timespec="seconds")
+        )
+        parsed.update({"effective_at": effective_at, "source": self.name, "notice_url": href})
+        return FetchResult(source=self.name, ok=True, rows=1, data=[parsed], error=None)
 
 
 __all__ = ["NationalFGWEventFetcher", "LIST_URL", "LIST_LINK_RE"]

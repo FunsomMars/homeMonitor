@@ -17,10 +17,12 @@ from .gold_format import CHANNELS, build_channels_meta, build_current, build_his
 from .oil_format import (
     build_current as oil_build_current,
     build_history_series as oil_build_history,
+    load_seed_history as load_seed_oil_history,
     load_seed_adjustments,
     load_seed_map,
 )
 from .gold_store import DEFAULT_DB as DEFAULT_GOLD_DB, GoldStore
+from .oil_store import DEFAULT_DB as DEFAULT_OIL_DB, OilStore
 from .xiaomi_mjwsd06 import decode_advertisement
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +38,7 @@ def now_iso() -> str:
 
 class Store:
     def __init__(self, db_path: Path, config_path: Path, ingest_token: str | None = None,
-                 gold_db_path: Path | None = None):
+                 gold_db_path: Path | None = None, oil_db_path: Path | None = None):
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
@@ -60,6 +62,8 @@ class Store:
         self.pending_readings: dict[str, dict[str, object]] = {}
         # 黄金子模块（独立 SQLite，与 telemetry.db 物理隔离）
         self.gold = GoldStore(gold_db_path or DEFAULT_GOLD_DB)
+        # 油价子模块（独立 SQLite，抓取失败时 API 继续回退 seed）
+        self.oil = OilStore(oil_db_path or DEFAULT_OIL_DB)
         self._init_db()
 
     @staticmethod
@@ -366,7 +370,9 @@ class Handler(BaseHTTPRequestHandler):
         # ---- 油价监控 ----
         if parsed.path == "/api/oil/current":
             province = query.get("province", ["江苏"])[0]
-            return json_response(self, oil_build_current(province))
+            seed_rows = load_seed_oil_history()["rows"]
+            live_rows = self.store.oil.rows(province)
+            return json_response(self, oil_build_current(province, seed_rows + live_rows))
         if parsed.path == "/api/oil/history":
             province = query.get("province", ["江苏"])[0]
             fuel = query.get("type", ["92"])[0]
@@ -374,18 +380,47 @@ class Handler(BaseHTTPRequestHandler):
                 days = min(max(int(query.get("days", ["365"])[0]), 0), 3650)
             except ValueError:
                 days = 365
-            return json_response(self, oil_build_history(province, fuel, days))
+            seed_rows = load_seed_oil_history()["rows"]
+            live_rows = self.store.oil.rows(province, fuel, days)
+            return json_response(self, oil_build_history(province, fuel, days,
+                                                         seed_rows + live_rows))
         if parsed.path == "/api/oil/adjustments":
             try:
                 limit = min(max(int(query.get("limit", ["10"])[0]), 1), 100)
             except ValueError:
                 limit = 10
-            return json_response(self, {"events": load_seed_adjustments()[:limit]})
+            events = load_seed_adjustments() + self.store.oil.adjustments(limit)
+            events.sort(key=lambda item: item["effective_at"], reverse=True)
+            return json_response(self, {"events": events[:limit]})
         if parsed.path == "/api/oil/map":
-            return json_response(self, load_seed_map())
+            payload = load_seed_map()
+            latest = self.store.oil.rows("江苏", "92")
+            if latest:
+                current = latest[-1]
+                for item in payload.get("data", []):
+                    if item.get("name") == "江苏":
+                        item["value"] = current["price"]
+                        break
+                prices = [item["value"] for item in payload.get("data", [])]
+                payload["as_of"] = current["effective_at"]
+                payload["min"] = min(prices) if prices else None
+                payload["max"] = max(prices) if prices else None
+            return json_response(self, payload)
         # ---- 黄金监控 ----
         if parsed.path == "/api/gold/current":
-            return json_response(self, build_current())
+            from server.gold_format import load_seed_brands, load_seed_history
+            seed_history = load_seed_history()
+            for row in self.store.gold.current():
+                seed_history["channels"].setdefault(row["channel"], []).append({
+                    "brand": row["brand"],
+                    "price": row["price"],
+                    "effective_at": row["effective_at"],
+                    "source": row["source"],
+                })
+            return json_response(self, build_current(
+                seed_history=seed_history,
+                seed_brands=load_seed_brands(),
+            ))
         if parsed.path == "/api/gold/channels":
             return json_response(self, build_channels_meta(
                 source_status=self.store.gold.source_status(),
@@ -607,16 +642,21 @@ def main():
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--gold-db", type=Path, default=DEFAULT_GOLD_DB,
                         help="gold prices sqlite (independent file)")
+    parser.add_argument("--oil-db", type=Path, default=DEFAULT_OIL_DB,
+                        help="oil prices sqlite (independent file)")
     parser.add_argument("--ingest-token", default=os.getenv("HOME_MONITOR_INGEST_TOKEN"))
     parser.add_argument("--no-gold-scheduler", action="store_true",
                         help="disable background gold fetcher daemon")
+    parser.add_argument("--no-oil-scheduler", action="store_true",
+                        help="disable background oil fetcher daemon")
     parser.add_argument("--demo", action="store_true", help="generate synthetic readings")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = Store(args.db, args.config, ingest_token=args.ingest_token,
-                  gold_db_path=args.gold_db)
+                  gold_db_path=args.gold_db, oil_db_path=args.oil_db)
     readers: list[threading.Thread] = []
     sched = None  # 后台黄金调度器（不一定启动）
+    oil_sched = None
     if args.demo:
         readers.append(DemoReader(store))
     else:
@@ -642,6 +682,10 @@ def main():
         sched.start()
         # 已在上面 start()，不能再 append 到 readers（for 循环会重复 start 触发 RuntimeError）
         # 用单独的变量追踪，shutdown 时停止
+    if not args.demo and not args.no_oil_scheduler:
+        from .oil_fetcher.scheduler import OilScheduler
+        oil_sched = OilScheduler(store.oil)
+        oil_sched.start()
     for reader in readers:
         reader.start()
     Handler.store = store
@@ -660,6 +704,8 @@ def main():
                 reader.stop_event.set()
         if sched is not None and hasattr(sched, "stop_event"):
             sched.stop_event.set()
+        if oil_sched is not None and hasattr(oil_sched, "stop_event"):
+            oil_sched.stop_event.set()
 
 
 if __name__ == "__main__":

@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import http.client
+import json
 import logging
+import re
 import urllib.error
 import urllib.request
 
@@ -23,7 +25,8 @@ from server.gold_format import FetchResult, parse_sge_table
 
 logger = logging.getLogger(__name__)
 
-LIST_URL = "https://www.sge.com.cn/sjzx/quotation_daily_new"
+QUOTATIONS_URL = "https://www.sge.com.cn/graph/quotations"
+LIST_URL = QUOTATIONS_URL
 HTTP_TIMEOUT = 8
 
 
@@ -42,6 +45,40 @@ def _http_get(url: str) -> str:
         return exc.partial.decode("utf-8", errors="replace")
 
 
+def _http_get_json(url: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=b"",
+        method="POST",
+        headers={
+            "User-Agent": "Mozilla/5.0 (homeMonitor-gold/1.0)",
+            "Referer": "https://www.sge.com.cn/sjzx/quotation_daily_new",
+            "X-Requested-With": "XMLHttpRequest",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def parse_sge_quote(payload: dict) -> list[dict]:
+    """解析 SGE 当前 Au99.99 分钟行情 JSON。"""
+    try:
+        prices = payload.get("data") or []
+        price = next(float(v) for v in reversed(prices) if v not in (None, "", "-"))
+    except (AttributeError, StopIteration, TypeError, ValueError):
+        return []
+    if not 200.0 <= price <= 10000.0:
+        return []
+    stamp = str(payload.get("delaystr", ""))
+    m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{2}:\d{2}:\d{2})", stamp)
+    if m:
+        effective_at = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}T{m.group(4)}+08:00"
+    else:
+        from datetime import datetime
+        effective_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    return [{"brand": payload.get("heyue") or "Au99.99", "price": round(price, 2), "effective_at": effective_at}]
+
+
 class SgeCurrentFetcher:
     name = "sge"
     kind = "current"
@@ -51,14 +88,15 @@ class SgeCurrentFetcher:
 
     def fetch(self) -> FetchResult:
         try:
-            html = _http_get(self.url)
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            payload = _http_get_json(self.url)
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             return FetchResult(source=self.name, ok=False, error=f"http: {exc}")
         try:
-            rows = parse_sge_table(html)
+            rows = parse_sge_quote(payload)
         except ValueError as exc:
             return FetchResult(source=self.name, ok=False, error=str(exc))
-        return FetchResult(source=self.name, ok=True, rows=len(rows))
+        return FetchResult(source=self.name, ok=bool(rows), rows=len(rows), data=rows,
+                           error=None if rows else "no quotation data")
 
 
-__all__ = ["SgeCurrentFetcher", "LIST_URL"]
+__all__ = ["SgeCurrentFetcher", "LIST_URL", "QUOTATIONS_URL", "parse_sge_quote"]

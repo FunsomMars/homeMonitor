@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import http.client
+import gzip
 import logging
 import urllib.error
 import urllib.request
@@ -35,7 +36,10 @@ def _http_get(url: str) -> str:
     )
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # noqa: S310
-            return resp.read().decode("utf-8", errors="replace")
+            body = resp.read()
+            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip" or body[:2] == b"\x1f\x8b":
+                body = gzip.decompress(body)
+            return body.decode("utf-8", errors="replace")
     except http.client.IncompleteRead as exc:
         return exc.partial.decode("utf-8", errors="replace")
 
@@ -56,7 +60,8 @@ class SmmBrandFetcher:
             rows = parse_smm_html(html)
         except ValueError as exc:
             return FetchResult(source=self.name, ok=False, error=str(exc))
-        return FetchResult(source=self.name, ok=True, rows=len(rows))
+        return FetchResult(source=self.name, ok=bool(rows), rows=len(rows), data=rows,
+                           error=None if rows else "no quotation data")
 
 
 __all__ = ["SmmBrandFetcher", "LIST_URL"]
