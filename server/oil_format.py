@@ -18,6 +18,19 @@ PROVINCES = [
 FUEL_TYPES = ("92", "95", "98", "0")
 
 
+# 内部 source id → 中文显示名；空字符串表示不显示
+_SOURCE_DISPLAY = {
+    "national_fgw": "国家发改委",
+    "jiangsu_fgw": "江苏省发改委",
+    "eastmoney": "东方财富",
+    "seed": "",          # 本地兜底数据不展示来源
+    "demo": "演示数据",
+}
+
+def _display_source(src: str) -> str:
+    return _SOURCE_DISPLAY.get(src or "", src or "")
+
+
 def _parse_iso(s: str) -> datetime | None:
     if not s:
         return None
@@ -57,6 +70,7 @@ def load_seed_history() -> dict:
             "price": round(float(it["price"]), 2),
             "effective_at": eff.isoformat(timespec="seconds"),
             "source": raw.get("source", "seed"),
+            "source_display": _display_source(raw.get("source", "seed")),
         })
     rows.sort(key=lambda r: (r["fuel_type"], r["effective_at"]))
     return {"province": raw.get("province", "江苏"), "rows": rows}
@@ -76,11 +90,13 @@ def load_seed_adjustments() -> list[dict]:
             gc = int(e["gasoline_change"]); dc = int(e["diesel_change"])
         except (KeyError, TypeError, ValueError):
             continue
+        src = e.get("source", "seed")
         out.append({
             "effective_at": eff.isoformat(timespec="seconds"),
             "gasoline_change": gc,
             "diesel_change": dc,
-            "source": e.get("source", "seed"),
+            "source": src,
+            "source_display": _display_source(src),
             "notice_url": e.get("notice_url"),
         })
     out.sort(key=lambda r: r["effective_at"], reverse=True)
@@ -127,11 +143,14 @@ def build_current(province: str = "江苏", history_rows=None, adjustments=None)
             "price": row["price"],
             "effective_at": row["effective_at"],
             "source": row["source"],
+            "source_display": row.get("source_display") or _display_source(row["source"]),
             "confidence": "fallback" if row["source"] == "seed" else "official",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
     last_adj = adjustments[0] if adjustments else None
+    if last_adj is not None and "source_display" not in last_adj:
+        last_adj = {**last_adj, "source_display": _display_source(last_adj.get("source", ""))}
     return {
         "province": province,
         "as_of": items[0]["effective_at"] if items else None,
@@ -201,7 +220,8 @@ def parse_eastmoney_row(row: dict) -> dict | None:
     if ft not in FUEL_TYPES or not _valid_price(price) or not _parse_iso(eff):
         return None
     return {"province": prov, "fuel_type": ft, "price": round(price, 2),
-            "effective_at": eff, "source": "eastmoney"}
+            "effective_at": eff, "source": "eastmoney",
+            "source_display": _display_source("eastmoney")}
 
 
 # 调价通知解析：支持多种表述
@@ -213,7 +233,11 @@ _GAS_UP = re.compile(r"汽油[^\d]{0,8}?提高\s*" + _NUMBER)
 _GAS_DN = re.compile(r"汽油[^\d]{0,8}?降低\s*" + _NUMBER)
 _DSL_UP = re.compile(r"柴油[^\d]{0,8}?提高\s*" + _NUMBER)
 _DSL_DN = re.compile(r"柴油[^\d]{0,8}?降低\s*" + _NUMBER)
-_PAIR = re.compile(r"(?:汽柴油|汽油[、，]柴油)[^\d]{0,12}?(?:分别)?(?:提高|降低)\s*(\d+)\s*元[^\d]{0,4}?(\d+)\s*元")
+_PAIR = re.compile(
+    r"(?:汽柴油|汽[、，]?柴油|汽油[、，]柴油)"
+    r"[^\d]{0,20}?(?:分别)?(?:提高|降低)\s*"
+    r"(\d+)\s*元[^\d]{0,8}?(\d+)\s*元"
+)
 
 
 def parse_adjust_notice(text: str) -> dict | None:

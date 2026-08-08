@@ -26,18 +26,22 @@
       align-items: center;
       gap: 14px;
       padding: 0 18px;
-      background: var(--card);
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: saturate(180%) blur(14px);
+      -webkit-backdrop-filter: saturate(180%) blur(14px);
       border-bottom: 1px solid var(--line);
+      box-shadow: 0 1px 0 rgba(15, 26, 35, .02), 0 4px 12px rgba(15, 26, 35, .03);
       z-index: 10;
     }
     .topbar .toggle {
       width: 36px; height: 36px;
       display: inline-flex; align-items: center; justify-content: center;
-      border: 1px solid var(--line); background: white; border-radius: 8px;
+      border: 1px solid var(--line); background: white; border-radius: 9px;
       cursor: pointer; color: var(--ink);
+      transition: background .12s ease, border-color .12s ease;
     }
-    .topbar .toggle:hover { background: var(--bg); }
-    .topbar h1 { margin: 0; font-size: 18px; }
+    .topbar .toggle:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+    .topbar h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: .005em; }
     .topbar .sub { margin: 0; font-size: 12px; color: var(--muted); margin-left: 4px; }
     .topbar .status { margin-left: auto; color: var(--muted); font-size: 13px; }
 
@@ -46,28 +50,32 @@
       position: fixed;
       top: 56px; bottom: 0; left: 0;
       width: 200px;
-      background: var(--card);
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: saturate(180%) blur(14px);
+      -webkit-backdrop-filter: saturate(180%) blur(14px);
       border-right: 1px solid var(--line);
-      padding: 12px 8px;
-      display: flex; flex-direction: column; gap: 4px;
-      transition: width .18s ease;
+      padding: 14px 10px;
+      display: flex; flex-direction: column; gap: 2px;
+      transition: width .2s ease;
       overflow: hidden;
       z-index: 9;
     }
     aside.sidebar.collapsed { width: 56px; }
     aside.sidebar .nav-item {
       display: flex; align-items: center; gap: 12px;
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-radius: 9px;
-      color: var(--ink);
+      color: var(--ink-soft);
       text-decoration: none;
       cursor: pointer;
       white-space: nowrap;
       font-size: 14px;
+      transition: background .12s ease, color .12s ease;
     }
-    aside.sidebar .nav-item:hover { background: var(--bg); }
+    aside.sidebar .nav-item:hover { background: var(--accent-soft); color: var(--accent); }
     aside.sidebar .nav-item.active {
       background: var(--accent); color: white;
+      box-shadow: 0 2px 8px rgba(22, 124, 128, .25);
     }
     aside.sidebar .nav-item .icon {
       width: 22px; height: 22px;
@@ -99,24 +107,42 @@
     }
     aside.sidebar.collapsed ~ .content { margin-left: 56px; }
 
-    /* iframe 占满 */
-    .frame-wrap { width: 100%; height: 100%; }
-    iframe { width: 100%; height: 100%; border: 0; display: block; }
+    /* iframe 内容自适应高度（由子页 postMessage 上报），不再写死 height 让内部出现滚动条 */
+    .frame-wrap { width: 100%; }
+    iframe { width: 100%; border: 0; display: block; min-height: calc(100vh - 56px); }
 
     /* 概览面板样式 */
-    .overview { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+    .overview { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
     @media (max-width: 1000px) { .overview { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 700px) { .overview { grid-template-columns: 1fr; } }
-    .overview .card { display: block; }
-    .overview h2 { margin: 0 0 8px; font-size: 18px; }
-    .overview .big { font-size: 26px; font-weight: 600; margin-top: 6px; }
-    .overview .sub { color: var(--muted); font-size: 12px; }
-    .overview .click-hint {
-      display: inline-block; margin-top: 12px;
-      color: var(--accent); font-size: 13px;
+    .overview .card {
+      display: block;
+      cursor: pointer;
+      transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease;
     }
+    .overview .card:hover {
+      box-shadow: var(--shadow-md);
+      border-color: #d3dde2;
+      transform: translateY(-1px);
+    }
+    .overview h2 {
+      margin: 0 0 6px; font-size: 13px; font-weight: 600;
+      color: var(--muted); letter-spacing: .12em; text-transform: uppercase;
+    }
+    .overview .sub { color: var(--muted); font-size: 12px; }
+    .overview .big {
+      font-size: 28px; font-weight: 700;
+      margin-top: 10px; color: var(--ink);
+      letter-spacing: -.01em;
+    }
+    .overview .click-hint {
+      display: inline-block; margin-top: 14px;
+      color: var(--accent); font-size: 13px;
+      transition: transform .14s ease;
+    }
+    .overview .card:hover .click-hint { transform: translateX(2px); }
 
-    .overview-footer { color: var(--muted); font-size: 12px; margin-top: 26px; }
+    .overview-footer { color: var(--muted); font-size: 12px; margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
 
     /* 首页黄金卡：4 个 channel 拼成 2x2 小网格 */
     .ovGoldGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 10px 0 12px; }
@@ -307,10 +333,13 @@ $('toggleBtn').addEventListener('click', () => {
 
 addEventListener('hashchange', () => setTab(location.hash.replace('#', '')));
 
-// 监听子页 iframe 上报的状态
+// 监听子页 iframe 上报的状态 + 内容高度
 addEventListener('message', e => {
-  if (e.data && e.data.type === 'child-status' && typeof e.data.text === 'string') {
+  if (!e.data) return;
+  if (e.data.type === 'child-status' && typeof e.data.text === 'string') {
     $('status').textContent = e.data.text;
+  } else if (e.data.type === 'child-height' && typeof e.data.height === 'number') {
+    $('frame').style.height = e.data.height + 'px';
   }
 });
 
@@ -327,7 +356,7 @@ async function loadOverview() {
     $('ovTempBig').textContent = '—';
   }
   try {
-    const oil = await HM.getJSON('/api/oil/current?province=江苏');
+    const oil = await HM.getJSON('/api/oil/current?province=' + encodeURIComponent('江苏'));
     const p92 = (oil.items || []).find(i => i.type === '92');
     $('ovOil').textContent = p92 ? `江苏 92#` : '暂无数据';
     $('ovOilBig').textContent = p92 ? `${p92.price.toFixed(2)} 元/升` : '—';
