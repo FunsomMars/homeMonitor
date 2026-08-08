@@ -18,6 +18,7 @@ from server.gold_format import (  # noqa: E402
     build_current, build_history_series, build_channels_meta,
     parse_sge_table, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
 )
+from server.app import merge_gold_history  # noqa: E402
 
 
 # 真实 HTML/CSV 样本（取自数据源公开页面简化版）
@@ -254,6 +255,28 @@ class SeedLoadTest(unittest.TestCase):
 
 
 class SeriesBuildTest(unittest.TestCase):
+    def test_merge_history_keeps_seed_curve_and_overlays_live_day(self):
+        seed = {"channels": {ch: [] for ch in CHANNELS}, "as_of": None}
+        seed["channels"]["sge"] = [{
+            "brand": "", "price": 783.52,
+            "effective_at": "2026-07-31T00:00:00+08:00", "source": "seed",
+        }]
+        seed["channels"]["smm"] = [{
+            "brand": "周大福", "price": 962.0,
+            "effective_at": "2026-07-31T00:00:00+08:00", "source": "seed",
+        }]
+        merged = merge_gold_history(seed, [
+            {"channel": "sge", "brand": "", "price": 928.47,
+             "effective_at": "2026-08-08T12:00:00+08:00", "source": "sge"},
+            {"channel": "smm", "brand": "周大福", "price": 1286.0,
+             "effective_at": "2026-08-08T00:00:00+08:00", "source": "smm"},
+        ])
+        sge = build_history_series("sge", "", 180, seed_history=merged)
+        smm = build_history_series("smm", "", 180, seed_history=merged)
+        self.assertEqual(sge["series"][-1]["date"], "2026-08-08")
+        self.assertEqual(len(sge["series"]), 2)
+        self.assertEqual(smm["series"][0]["points"][-1], ["2026-08-08", 1286.0])
+
     def test_build_channels_meta(self):
         meta = build_channels_meta()
         self.assertEqual(len(meta["channels"]), len(CHANNELS))

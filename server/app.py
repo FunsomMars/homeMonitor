@@ -36,6 +36,33 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def merge_gold_history(seed_history: dict, live_rows: list[dict]) -> dict:
+    """按品牌和自然日合并种子/实时历史，实时行覆盖同日种子值。"""
+    merged = {
+        "channels": {channel: [] for channel in CHANNELS},
+        "as_of": seed_history.get("as_of"),
+    }
+    for channel in CHANNELS:
+        by_day: dict[tuple[str, str], dict] = {}
+        for row in seed_history.get("channels", {}).get(channel, []):
+            item = dict(row)
+            by_day[(item.get("brand", ""), item.get("effective_at", "")[:10])] = item
+        for row in live_rows:
+            if row.get("channel") != channel:
+                continue
+            item = {
+                "brand": row.get("brand", ""),
+                "price": row["price"],
+                "effective_at": row["effective_at"],
+                "source": row.get("source", channel),
+            }
+            by_day[(item["brand"], item["effective_at"][:10])] = item
+        merged["channels"][channel] = sorted(
+            by_day.values(), key=lambda item: (item.get("brand", ""), item["effective_at"])
+        )
+    return merged
+
+
 class Store:
     def __init__(self, db_path: Path, config_path: Path, ingest_token: str | None = None,
                  gold_db_path: Path | None = None, oil_db_path: Path | None = None):
@@ -437,77 +464,11 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 days = 365
             days = max(0, min(days, 3650))
-            # 优先用 DB 真实历史；空时回退 seed
-            from server.gold_format import CHANNEL_META as _gold_meta
-            meta = _gold_meta[channel]
-            is_multi = (channel == "smm" and not brand)
-            if is_multi:
-                db_multi = self.store.gold.history_multi_brand("smm", days)
-            else:
-                db_series = self.store.gold.history(channel, brand, days)
-            if is_multi and not db_multi:
-                from server.gold_format import load_seed_history as _seed_loader
-                seed_hist = _seed_loader()
-                payload = build_history_series(channel, brand, days, seed_history=seed_hist)
-            elif not is_multi and not db_series:
-                from server.gold_format import load_seed_history as _seed_loader
-                seed_hist = _seed_loader()
-                payload = build_history_series(channel, brand, days, seed_history=seed_hist)
-            elif is_multi:
-                # DB 多品牌：自行计算 stats（按品牌最后一日均价）
-                last_date = max((s["points"][-1][0] for s in db_multi if s["points"]), default=None)
-                first_date = min((s["points"][0][0] for s in db_multi if s["points"]), default=None)
-                stats = None
-                if last_date and first_date:
-                    vals_last = [s["points"][-1][1] for s in db_multi if s["points"] and s["points"][-1][0] == last_date]
-                    vals_first = [s["points"][0][1] for s in db_multi if s["points"] and s["points"][0][0] == first_date]
-                    if vals_last and vals_first:
-                        avg_last = round(sum(vals_last) / len(vals_last), 2)
-                        avg_first = round(sum(vals_first) / len(vals_first), 2)
-                        delta = round(avg_last - avg_first, 2)
-                        delta_pct = round(delta / avg_first * 100, 2) if avg_first else 0
-                        stats = {
-                            "first_date": first_date,
-                            "last_date": last_date,
-                            "first_value": avg_first,
-                            "last_value": avg_last,
-                            "delta": delta,
-                            "delta_pct": delta_pct,
-                        }
-                payload = {
-                    "channel": channel,
-                    "brand": "",
-                    "name": meta["name"],
-                    "unit": meta["unit"],
-                    "kind": meta["kind"],
-                    "days": days,
-                    "series": db_multi,
-                    "stats": stats,
-                }
-            else:
-                stats = None
-                if db_series:
-                    first, last = db_series[0], db_series[-1]
-                    delta = round(last["value"] - first["value"], 2)
-                    delta_pct = round(delta / first["value"] * 100, 2) if first["value"] else 0
-                    stats = {
-                        "first_date": first["date"],
-                        "last_date": last["date"],
-                        "first_value": first["value"],
-                        "last_value": last["value"],
-                        "delta": delta,
-                        "delta_pct": delta_pct,
-                    }
-                payload = {
-                    "channel": channel,
-                    "brand": brand,
-                    "name": meta["name"],
-                    "unit": meta["unit"],
-                    "kind": meta["kind"],
-                    "days": days,
-                    "series": db_series,
-                    "stats": stats,
-                }
+            from server.gold_format import load_seed_history as _seed_loader
+            merged_history = merge_gold_history(
+                _seed_loader(), self.store.gold.history_rows(channel)
+            )
+            payload = build_history_series(channel, brand, days, seed_history=merged_history)
             return json_response(self, payload)
         if parsed.path == "/api/gold/health":
             return json_response(self, {

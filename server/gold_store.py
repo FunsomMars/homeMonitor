@@ -223,6 +223,23 @@ class GoldStore:
                 ).fetchall()
         return [{"date": r["effective_at"][:10], "value": r["price"]} for r in rows]
 
+    def history_rows(self, channel: str | None = None) -> list[dict]:
+        """返回完整历史行，供 API 与种子历史按日期合并。"""
+        with self.lock:
+            if channel:
+                rows = self.db.execute(
+                    "SELECT channel, brand, price, effective_at, source "
+                    "FROM gold_history WHERE channel=? "
+                    "ORDER BY channel ASC, brand ASC, effective_at ASC",
+                    (channel,),
+                ).fetchall()
+            else:
+                rows = self.db.execute(
+                    "SELECT channel, brand, price, effective_at, source "
+                    "FROM gold_history ORDER BY channel ASC, brand ASC, effective_at ASC"
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def history_multi_brand(self, channel: str, days: int) -> list[dict]:
         """SMM 多品牌专用：返回 ``[{brand, points: [[date, value], ...]}, ...]``。
 
