@@ -254,6 +254,28 @@ class SeriesBuildTest(unittest.TestCase):
             self.assertIn("name", entry)
             self.assertIn("unit", entry)
 
+    def test_build_current_single_uses_newer_named_live_row(self):
+        seed = {
+            "channels": {ch: [] for ch in CHANNELS},
+            "as_of": None,
+        }
+        seed["channels"]["sge"] = [{
+            "brand": "",
+            "price": 783.52,
+            "effective_at": "2026-07-31T00:00:00+08:00",
+            "source": "seed",
+        }]
+        seed["channels"]["sge"].append({
+            "brand": "Au99.99",
+            "price": 928.47,
+            "effective_at": "2026-08-08T12:00:00+08:00",
+            "source": "sge",
+        })
+        result = build_current(seed_history=seed, seed_brands={"brands": [], "as_of": None})
+        current = result["channels"]["sge"]["items"][0]
+        self.assertEqual(current["price"], 928.47)
+        self.assertEqual(current["source"], "sge")
+
     def test_build_current_smm_multi(self):
         result = build_current()
         smm = result["channels"]["smm"]

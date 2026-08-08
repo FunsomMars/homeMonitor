@@ -23,8 +23,8 @@ CHANNEL_META: dict[str, dict] = {
 
 # 价格合理范围（用于 seed 校验 + 防止爬虫抓到异常值）
 PRICE_RANGE = {
-    "sge":   (200.0, 900.0),    # 元/克
-    "shfe":  (200.0, 900.0),
+    "sge":   (200.0, 1200.0),   # 元/克
+    "shfe":  (200.0, 1200.0),
     "yahoo": (1000.0, 10000.0),  # 美元/盎司
     "smm":   (400.0, 1500.0),   # 元/克（金店零售挂牌含工费）
 }
@@ -172,10 +172,11 @@ def build_current(seed_history=None, seed_brands=None) -> dict:
                 "items": live_brands,
             }
         else:
-            # single 类型：取 brand=="" 的最新一行
-            single = latest_per_brand.get("") or next(
-                (latest_per_brand[b] for b in latest_per_brand),
-                None,
+            # single 类型：不同来源可能使用不同 brand 标识，统一取最新一行。
+            single = max(
+                latest_per_brand.values(),
+                key=lambda r: r["effective_at"],
+                default=None,
             )
             if single is None:
                 channels_out[ch] = {

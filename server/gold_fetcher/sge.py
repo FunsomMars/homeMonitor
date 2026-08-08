@@ -76,6 +76,14 @@ def parse_sge_quote(payload: dict) -> list[dict]:
     else:
         from datetime import datetime
         effective_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    # 行情服务偶尔会返回超前的缓存时间，不能让页面显示未来日期。
+    from datetime import datetime
+    now = datetime.now().astimezone()
+    try:
+        if datetime.fromisoformat(effective_at) > now:
+            effective_at = now.isoformat(timespec="seconds")
+    except ValueError:
+        effective_at = now.isoformat(timespec="seconds")
     return [{"brand": payload.get("heyue") or "Au99.99", "price": round(price, 2), "effective_at": effective_at}]
 
 

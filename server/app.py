@@ -372,7 +372,9 @@ class Handler(BaseHTTPRequestHandler):
             province = query.get("province", ["江苏"])[0]
             seed_rows = load_seed_oil_history()["rows"]
             live_rows = self.store.oil.rows(province)
-            return json_response(self, oil_build_current(province, seed_rows + live_rows))
+            events = load_seed_adjustments() + self.store.oil.adjustments(100)
+            events.sort(key=lambda item: item["effective_at"], reverse=True)
+            return json_response(self, oil_build_current(province, seed_rows + live_rows, events))
         if parsed.path == "/api/oil/history":
             province = query.get("province", ["江苏"])[0]
             fuel = query.get("type", ["92"])[0]
