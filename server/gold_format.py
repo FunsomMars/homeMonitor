@@ -436,6 +436,45 @@ def parse_shfe_kx(html: str) -> list[dict]:
     return out
 
 
+def parse_shfe_json(payload: dict, effective_date: str | None = None) -> list[dict]:
+    """解析 SHFE 新版日交易快讯 JSON，返回持仓量最大的黄金主力合约。"""
+    if not isinstance(payload, dict):
+        return []
+    candidates: list[dict] = []
+    for item in payload.get("o_curinstrument", []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("PRODUCTGROUPID", "")).lower() != "au":
+            continue
+        delivery = str(item.get("DELIVERYMONTH", "")).strip()
+        if not delivery.isdigit():
+            continue
+        try:
+            price = float(item.get("SETTLEMENTPRICE"))
+        except (TypeError, ValueError):
+            continue
+        if not _valid_price("shfe", price):
+            continue
+        try:
+            open_interest = int(item.get("OPENINTEREST", 0))
+        except (TypeError, ValueError):
+            open_interest = 0
+        candidates.append({
+            "brand": "au" + delivery,
+            "price": round(price, 2),
+            "open_interest": open_interest,
+        })
+    if not candidates:
+        return []
+    main = max(candidates, key=lambda row: row["open_interest"])
+    day = effective_date or datetime.now().astimezone().date().isoformat()
+    return [{
+        "brand": main["brand"],
+        "price": main["price"],
+        "effective_at": day + "T00:00:00+08:00",
+    }]
+
+
 def parse_yahoo_csv(csv_text: str) -> list[dict]:
     """从 Yahoo Finance ``download/GC=F`` CSV 解析历史 + 最新价。
 
@@ -583,6 +622,7 @@ __all__ = [
     "build_channels_meta",
     "parse_sge_table",
     "parse_shfe_kx",
+    "parse_shfe_json",
     "parse_yahoo_csv",
     "parse_yahoo_chart",
     "parse_smm_html",

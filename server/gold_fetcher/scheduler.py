@@ -106,10 +106,12 @@ class GoldScheduler(threading.Thread):
         rows = result.data
         n = 0
         for r in rows:
+            # 单值频道统一使用默认 brand，保证历史曲线与页面查询参数一致。
+            brand = r.get("brand", "") if name == "smm" else ""
             # current upsert
             self.store.upsert_current(
                 channel=name,
-                brand=r.get("brand", ""),
+                brand=brand,
                 price=r["price"],
                 effective_at=r["effective_at"],
                 source=name,
@@ -118,7 +120,7 @@ class GoldScheduler(threading.Thread):
             # history 追加
             self.store.insert_history(
                 channel=name,
-                brand=r.get("brand", ""),
+                brand=brand,
                 price=r["price"],
                 effective_at=r["effective_at"],
                 source=name,

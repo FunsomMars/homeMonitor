@@ -360,7 +360,9 @@
               return found ? found[1] : null;
             }),
             smooth: true,
-            symbol: 'none',
+            // 单日数据也要显示出点，避免首次抓取时图表看起来为空。
+            symbol: 'circle',
+            symbolSize: 6,
             lineStyle: { width: 1.5, color: palette[idx % palette.length] },
             connectNulls: true,
           })),

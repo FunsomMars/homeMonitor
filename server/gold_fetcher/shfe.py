@@ -14,15 +14,18 @@ SHFE 主力合约日结算价表 HTML（举例）：
 from __future__ import annotations
 
 import http.client
+import json
 import logging
+from datetime import datetime, timedelta
 import urllib.error
 import urllib.request
 
-from server.gold_format import FetchResult, parse_shfe_kx
+from server.gold_format import FetchResult, parse_shfe_json
 
 logger = logging.getLogger(__name__)
 
 LIST_URL = "https://www.shfe.cn/reports/tradedata/dailyandweeklydata/"
+DATA_URL = "https://www.shfe.cn/data/tradedata/future/dailydata/kx{date}.dat"
 HTTP_TIMEOUT = 8
 
 
@@ -42,6 +45,19 @@ def _http_get(url: str) -> str:
         return exc.partial.decode("utf-8", errors="replace")
 
 
+def _http_get_json(url: str) -> dict:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (homeMonitor-gold/1.0)",
+            "Referer": "https://www.shfe.cn/reports/tradedata/dailyandweeklydata/",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
 class ShfeFuturesFetcher:
     name = "shfe"
     kind = "current"
@@ -50,15 +66,22 @@ class ShfeFuturesFetcher:
         self.url = url
 
     def fetch(self) -> FetchResult:
-        try:
-            html = _http_get(self.url)
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            return FetchResult(source=self.name, ok=False, error=f"http: {exc}")
-        try:
-            rows = parse_shfe_kx(html)
-        except ValueError as exc:
-            return FetchResult(source=self.name, ok=False, error=str(exc))
-        return FetchResult(source=self.name, ok=True, rows=len(rows))
+        errors = []
+        # 交易所非交易日没有文件，向前查找最近 7 个自然日。
+        today = datetime.now().astimezone().date()
+        for offset in range(7):
+            day = today - timedelta(days=offset)
+            date_text = day.isoformat()
+            try:
+                payload = _http_get_json(DATA_URL.format(date=day.strftime("%Y%m%d")))
+                rows = parse_shfe_json(payload, date_text)
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+                errors.append(str(exc))
+                continue
+            if rows:
+                return FetchResult(source=self.name, ok=True, rows=len(rows), data=rows)
+        return FetchResult(source=self.name, ok=False,
+                           error="; ".join(errors[-2:]) or "no settlement data")
 
 
-__all__ = ["ShfeFuturesFetcher", "LIST_URL"]
+__all__ = ["ShfeFuturesFetcher", "LIST_URL", "DATA_URL"]

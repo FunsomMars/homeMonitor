@@ -16,7 +16,7 @@ from server.gold_format import (  # noqa: E402
     CHANNELS, CHANNEL_META,
     load_seed_history, load_seed_brands,
     build_current, build_history_series, build_channels_meta,
-    parse_sge_table, parse_shfe_kx, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
+    parse_sge_table, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
 )
 
 
@@ -119,6 +119,23 @@ class SgeParserTest(unittest.TestCase):
 
 
 class ShfeParserTest(unittest.TestCase):
+    def test_json_main_contract_identified(self):
+        rows = parse_shfe_json({
+            "o_curinstrument": [
+                {"PRODUCTGROUPID": "au", "DELIVERYMONTH": "2608",
+                 "SETTLEMENTPRICE": 925.42, "OPENINTEREST": 3240},
+                {"PRODUCTGROUPID": "au", "DELIVERYMONTH": "2610",
+                 "SETTLEMENTPRICE": 927.54, "OPENINTEREST": 207293},
+                {"PRODUCTGROUPID": "au", "DELIVERYMONTH": "小计",
+                 "SETTLEMENTPRICE": "", "OPENINTEREST": 336567},
+                {"PRODUCTGROUPID": "cu", "DELIVERYMONTH": "2608",
+                 "SETTLEMENTPRICE": 1057.4, "OPENINTEREST": 999999},
+            ]
+        }, "2026-08-07")
+        self.assertEqual(rows[0]["brand"], "au2610")
+        self.assertEqual(rows[0]["price"], 927.54)
+        self.assertEqual(rows[0]["effective_at"], "2026-08-07T00:00:00+08:00")
+
     def test_main_contract_identified(self):
         rows = parse_shfe_kx(SHFE_HTML)
         codes = [r["brand"] for r in rows]
