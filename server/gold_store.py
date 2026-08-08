@@ -110,8 +110,17 @@ class GoldStore:
             ).fetchone()
             # 单调保留：effective_at 不倒退
             if cur and cur["effective_at"] and effective_at < cur["effective_at"]:
-                self.db.commit()
-                return 0
+                # 数据源偶发返回未来时间时，不能让这条异常记录永久阻塞正常更新。
+                try:
+                    current_dt = datetime.fromisoformat(cur["effective_at"])
+                    incoming_dt = datetime.fromisoformat(effective_at)
+                    now_dt = datetime.now(current_dt.tzinfo or timezone.utc)
+                    if not (current_dt > now_dt and incoming_dt <= now_dt):
+                        self.db.commit()
+                        return 0
+                except ValueError:
+                    self.db.commit()
+                    return 0
             self.db.execute(
                 """INSERT INTO gold_current
                 (channel, brand, price, unit, effective_at, source, confidence, updated_at)
