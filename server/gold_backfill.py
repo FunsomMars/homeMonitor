@@ -30,7 +30,7 @@ def _fetch_with_retry(fetcher, day, attempts: int = 3) -> list[dict]:
     raise last_error  # type: ignore[misc]
 
 
-def _fetch_one(day):
+def _fetch_one(day, delay: float = 0.15):
     rows: dict[str, list[dict]] = {"sge": [], "shfe": []}
     errors: dict[str, str] = {}
     for channel, fetcher in (("sge", fetch_sge_daily), ("shfe", fetch_shfe_daily)):
@@ -38,11 +38,13 @@ def _fetch_one(day):
             rows[channel] = _fetch_with_retry(fetcher, day)
         except Exception as exc:  # 非交易日的 404 等待下一日即可
             errors[channel] = str(exc)
+        if delay > 0:
+            time.sleep(delay)
     return day, rows, errors
 
 
 def backfill_official_history(store: GoldStore, days: int = 180,
-                              workers: int = 4) -> dict[str, int]:
+                              workers: int = 1, delay: float = 0.15) -> dict[str, int]:
     """补齐最近 ``days`` 天的官方日线；可重复执行，SQLite 唯一约束会去重。"""
     today = datetime.now().astimezone().date()
     dates = [today - timedelta(days=offset) for offset in range(days, -1, -1)
@@ -51,7 +53,7 @@ def backfill_official_history(store: GoldStore, days: int = 180,
     written = {"sge": 0, "shfe": 0}
     failures = {"sge": 0, "shfe": 0}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(_fetch_one, day) for day in dates]
+        futures = [pool.submit(_fetch_one, day, delay) for day in dates]
         for future in as_completed(futures):
             _, rows_by_channel, errors = future.result()
             for channel, rows in rows_by_channel.items():
@@ -74,10 +76,11 @@ def backfill_official_history(store: GoldStore, days: int = 180,
 def main() -> None:
     parser = argparse.ArgumentParser(description="回填官方黄金日线")
     parser.add_argument("--days", type=int, default=180, help="回填自然日数，默认 180")
-    parser.add_argument("--workers", type=int, default=2, help="并发请求数，默认 2")
+    parser.add_argument("--workers", type=int, default=1, help="并发请求数，默认 1")
+    parser.add_argument("--delay", type=float, default=0.15, help="每次请求后的间隔秒数，默认 0.15")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="gold.db 路径")
     args = parser.parse_args()
-    result = backfill_official_history(GoldStore(Path(args.db)), max(1, args.days), args.workers)
+    result = backfill_official_history(GoldStore(Path(args.db)), max(1, args.days), args.workers, args.delay)
     print(result)
 
 
