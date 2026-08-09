@@ -168,19 +168,37 @@ def build_history_series(province: str, fuel: str, days: int, history_rows=None,
     if adjustments is None:
         adjustments = load_seed_adjustments()
 
-    points = [r for r in history_rows if r["fuel_type"] == fuel]
-    points.sort(key=lambda r: r["effective_at"])
+    points_by_date: dict[str, dict] = {}
+    for row in history_rows:
+        if row["fuel_type"] != fuel:
+            continue
+        date = row["effective_at"][:10]
+        existing = points_by_date.get(date)
+        # 实时源优先于同日种子值；同源时保留时间更晚的一条。
+        is_live = row.get("source") not in (None, "seed")
+        old_is_live = existing and existing.get("source") not in (None, "seed")
+        if (existing is None or (is_live and not old_is_live)
+                or row["effective_at"] >= existing["effective_at"]):
+            points_by_date[date] = row
+    points = sorted(points_by_date.values(), key=lambda row: row["effective_at"])
     if days > 0 and points:
         last_dt = datetime.fromisoformat(points[-1]["effective_at"])
         cutoff = last_dt - timedelta(days=days)
         points = [p for p in points if datetime.fromisoformat(p["effective_at"]) >= cutoff]
 
     series = [{"date": p["effective_at"][:10], "value": p["price"]} for p in points]
-    point_dates = {p["date"] for p in series}
-    adj_marks = [
-        {"date": a["effective_at"][:10], "gasoline_change": a["gasoline_change"], "diesel_change": a["diesel_change"]}
-        for a in adjustments if a["effective_at"][:10] in point_dates
-    ]
+    start_date = series[0]["date"] if series else None
+    end_date = series[-1]["date"] if series else None
+    adj_by_date: dict[str, dict] = {}
+    for adjustment in adjustments:
+        date = adjustment["effective_at"][:10]
+        if start_date and start_date <= date <= end_date and date not in adj_by_date:
+            adj_by_date[date] = {
+                "date": date,
+                "gasoline_change": adjustment["gasoline_change"],
+                "diesel_change": adjustment["diesel_change"],
+            }
+    adj_marks = sorted(adj_by_date.values(), key=lambda item: item["date"])
 
     stats = None
     if series:

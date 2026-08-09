@@ -55,7 +55,11 @@ def _http_get_json(url: str) -> dict:
         },
     )
     with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:  # noqa: S310
-        return json.loads(resp.read().decode("utf-8", errors="replace"))
+        try:
+            body = resp.read()
+        except http.client.IncompleteRead as exc:
+            body = exc.partial
+    return json.loads(body.decode("utf-8", errors="replace"))
 
 
 class ShfeFuturesFetcher:

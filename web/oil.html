@@ -6,7 +6,7 @@
   <title>油价监控 · 家庭监控</title>
   <link rel="stylesheet" href="/common.css">
   <style>
-    html, body { min-height: 100%; }
+    html, body { min-height: 100%; background: #ffffff; }
     body { overflow: visible; }
     main { max-width: none; margin: 0; padding: 0; }
     /* 油价页背景与 gold.html 一致：覆盖 common.css 的 --bg 偏绿色 (#f3f6f5) */
@@ -177,27 +177,32 @@ async function loadHistory() {
   `;
   if (!chart && window.echarts) chart = echarts.init($('oilChart'));
   if (!chart) return;
-  const adjX = (data.adjustments || []).map(a => a.date);
-  const adjSeries = (data.series || []).map(p => ({
-    value: [p.date, p.value],
-    itemStyle: adjX.includes(p.date) ? { color: '#c5453a' } : null,
+  const adjustments = data.adjustments || [];
+  const adjX = adjustments.map(a => a.date);
+  const pricesByDate = new Map((data.series || []).map(p => [p.date, p.value]));
+  // 调价日可能没有单独的油价采样点；将它加入分类轴，虚线仍可落在真实调价日期。
+  const chartDates = Array.from(new Set([...pricesByDate.keys(), ...adjX])).sort();
+  const adjSeries = chartDates.map(date => ({
+    value: pricesByDate.has(date) ? pricesByDate.get(date) : null,
+    itemStyle: adjX.includes(date) ? { color: '#c5453a' } : null,
   }));
+  const adjustmentValue = a => state.fuel === '0' ? a.diesel_change : a.gasoline_change;
   chart.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: 50, right: 20, top: 30, bottom: 50 },
-    xAxis: { type: 'category', data: (data.series || []).map(p => p.date), axisLabel: { rotate: 30 } },
+    xAxis: { type: 'category', data: chartDates, axisLabel: { rotate: 30 } },
     yAxis: { type: 'value', name: '元/升', scale: true },
     // 仅保留鼠标滚轮缩放（inside），去掉底部蓝条 slider 保持清爽
     dataZoom: [{ type: 'inside' }],
     series: [{
-      name: state.fuel + '#', type: 'line', smooth: true, data: adjSeries,
+      name: state.fuel + '#', type: 'line', smooth: true, connectNulls: true, data: adjSeries,
       lineStyle: { width: 2, color: '#167c80' },
       areaStyle: { color: 'rgba(22,124,128,0.08)' },
       markLine: {
         symbol: 'none',
-        data: (data.adjustments || []).map(a => ({
+        data: adjustments.map(a => ({
           xAxis: a.date,
-          label: { formatter: `调价\n${a.gasoline_change>=0?'+':''}${a.gasoline_change}`, color: '#c5453a' },
+          label: { formatter: `调价\n${adjustmentValue(a)>=0?'+':''}${adjustmentValue(a)}`, color: '#c5453a' },
           lineStyle: { color: '#c5453a', type: 'dashed' },
         })),
       },

@@ -411,8 +411,10 @@ class Handler(BaseHTTPRequestHandler):
                 days = 365
             seed_rows = load_seed_oil_history()["rows"]
             live_rows = self.store.oil.rows(province, fuel, days)
+            events = load_seed_adjustments() + self.store.oil.adjustments(100)
+            events.sort(key=lambda item: item["effective_at"], reverse=True)
             return json_response(self, oil_build_history(province, fuel, days,
-                                                         seed_rows + live_rows))
+                                                         seed_rows + live_rows, events))
         if parsed.path == "/api/oil/adjustments":
             try:
                 limit = min(max(int(query.get("limit", ["10"])[0]), 1), 100)

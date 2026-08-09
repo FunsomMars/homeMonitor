@@ -84,7 +84,24 @@ class TestBuildHistorySeries(unittest.TestCase):
         h = of.build_history_series("江苏", "92", 3650)
         adj_dates = {a["date"] for a in h["adjustments"]}
         series_dates = {p["date"] for p in h["series"]}
-        self.assertTrue(adj_dates.issubset(series_dates))
+        self.assertTrue(adj_dates)
+        self.assertGreaterEqual(min(adj_dates), min(series_dates))
+        self.assertLessEqual(max(adj_dates), max(series_dates))
+
+    def test_adjustment_mark_kept_without_same_day_price_point(self):
+        rows = [
+            {"fuel_type": "92", "price": 7.15, "effective_at": "2026-07-04T00:00:00+08:00"},
+            {"fuel_type": "92", "price": 7.39, "effective_at": "2026-07-18T00:00:00+08:00"},
+        ]
+        adjustments = [{
+            "effective_at": "2026-07-17T16:00:00+00:00",
+            "gasoline_change": 300,
+            "diesel_change": 290,
+        }]
+        h = of.build_history_series("江苏", "92", 365, rows, adjustments)
+        self.assertEqual(h["adjustments"], [{
+            "date": "2026-07-17", "gasoline_change": 300, "diesel_change": 290,
+        }])
 
 
 class TestFetchProtocol(unittest.TestCase):
