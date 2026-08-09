@@ -39,7 +39,11 @@ def _http_get(url: str) -> dict:
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 (homeMonitor-gold/1.0)",
+            # Yahoo 会拒绝带有自定义产品标识的 UA；使用普通浏览器 UA 可稳定
+            # 返回公开 chart 接口，避免自动更新落入 403 后的旧数据。
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/131.0 Safari/537.36",
             "Accept": "application/json,text/plain,*/*",
             "Referer": "https://finance.yahoo.com/",
         },

@@ -92,6 +92,15 @@ SMM_HTML_NEW = """
 </table>
 """
 
+SMM_HTML_PRODUCT_PRIORITY = """
+<table>
+  <tr><td>周生生</td><td>工艺金条</td><td>1154</td><td>2026-08-09</td></tr>
+  <tr><td>周生生</td><td>黄金</td><td>1315</td><td>2026-08-09</td></tr>
+  <tr><td>周大福</td><td>投资类黄金</td><td>1148</td><td>2026-08-09</td></tr>
+  <tr><td>周大福</td><td>首饰黄金</td><td>1308</td><td>2026-08-09</td></tr>
+</table>
+"""
+
 
 class SgeParserTest(unittest.TestCase):
     def test_daily_html_uses_au9999_close_price(self):
@@ -204,6 +213,11 @@ class YahooParserTest(unittest.TestCase):
 
 
 class SmmParserTest(unittest.TestCase):
+    def test_prefers_retail_gold_over_ingot_or_investment_price(self):
+        rows = {row["brand"]: row for row in parse_smm_html(SMM_HTML_PRODUCT_PRIORITY)}
+        self.assertEqual(rows["周生生"]["price"], 1315)
+        self.assertEqual(rows["周大福"]["price"], 1308)
+
     def test_new_product_table_style(self):
         rows = parse_smm_html(SMM_HTML_NEW)
         prices = {r["brand"]: r["price"] for r in rows}

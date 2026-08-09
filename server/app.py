@@ -50,9 +50,9 @@ def merge_gold_history(seed_history: dict, live_rows: list[dict]) -> dict:
         )
         for row in seed_history.get("channels", {}).get(channel, []):
             item = dict(row)
-            # 现货/期货一旦已有官方日行情，就完全以官方曲线为准。否则临近
-            # 覆盖边界的种子点仍会与官方价形成断崖式跳变。
-            if channel in {"sge", "shfe"} and has_official_history:
+            # 已有真实来源时完全以真实曲线为准。静态种子只在首次尚未采到
+            # 任何行情时兜底，不能与真实数据混绘，否则会产生假跳变。
+            if has_official_history:
                 continue
             by_day[(item.get("brand", ""), item.get("effective_at", "")[:10])] = item
         for row in live_rows:
@@ -449,7 +449,14 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/gold/current":
             from server.gold_format import load_seed_brands, load_seed_history
             seed_history = load_seed_history()
-            for row in self.store.gold.current():
+            current_rows = self.store.gold.current()
+            for channel in CHANNELS:
+                if any(row["channel"] == channel and row.get("source") == channel
+                       for row in current_rows):
+                    # 金店等多品牌频道可能只采到部分品牌；不再把未采到品牌的
+                    # 过期种子价伪装成今日挂牌价。
+                    seed_history["channels"][channel] = []
+            for row in current_rows:
                 seed_history["channels"].setdefault(row["channel"], []).append({
                     "brand": row["brand"],
                     "price": row["price"],

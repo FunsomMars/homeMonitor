@@ -591,13 +591,13 @@ def parse_smm_html(html: str) -> list[dict]:
     if not html:
         return []
     eff_default = datetime.now().astimezone().isoformat(timespec="seconds")
-    seen: set[str] = set()
+    candidates: dict[str, list[tuple[int, dict]]] = {}
     for tr in re.findall(r"<tr[^>]*>.*?</tr>", html, flags=re.IGNORECASE | re.DOTALL):
         cells = [_cell_text(c) for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.IGNORECASE | re.DOTALL)]
         if len(cells) < 2:
             continue
         brand = next((b for b in _BRAND_NAMES if cells[0] == b), None)
-        if not brand or brand in seen:
+        if not brand:
             continue
         product = cells[1]
         is_gold_product = bool(re.search(r"黄金|足金|金条|工艺金", product)) and not re.search(r"铂金|白金", product)
@@ -616,8 +616,21 @@ def parse_smm_html(html: str) -> list[dict]:
             continue
         date_match = re.search(r"(\d{4}-\d{2}-\d{2})", " ".join(cells))
         effective_at = date_match.group(1) + "T00:00:00+08:00" if date_match else eff_default
-        out.append({"brand": brand, "price": round(price, 2), "effective_at": effective_at})
-        seen.add(brand)
+        # 不同品牌的首行产品不一致；统一优先零售黄金，避免混入投资金条、
+        # 回收或换购价而使各品牌没有可比性。
+        if re.fullmatch(r"(?:999|足)?黄金|首饰黄金|工艺品黄金", product):
+            rank = 0
+        elif re.search(r"金条|投资|回收|换购", product):
+            rank = 2
+        else:
+            rank = 1
+        candidates.setdefault(brand, []).append((rank, {
+            "brand": brand, "price": round(price, 2), "effective_at": effective_at,
+        }))
+    for brand in _BRAND_NAMES:
+        options = candidates.get(brand)
+        if options:
+            out.append(min(options, key=lambda item: item[0])[1])
     if not out:
         # 退路：在整 HTML 里按品牌名 + 数字抓
         for brand in _BRAND_NAMES:

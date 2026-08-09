@@ -143,9 +143,14 @@ class GoldStore:
         with self.lock:
             try:
                 self.db.execute(
-                    """INSERT OR IGNORE INTO gold_history
+                    """INSERT INTO gold_history
                     (channel, brand, price, effective_at, source)
-                    VALUES (?, ?, ?, ?, ?)""",
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(channel, brand, effective_at) DO UPDATE SET
+                        price=excluded.price,
+                        source=excluded.source
+                    WHERE gold_history.source=excluded.source
+                          OR gold_history.source='seed'""",
                     (channel, brand, round(float(price), 2), effective_at, source),
                 )
                 self.db.commit()
