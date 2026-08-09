@@ -44,15 +44,15 @@ def merge_gold_history(seed_history: dict, live_rows: list[dict]) -> dict:
     }
     for channel in CHANNELS:
         by_day: dict[tuple[str, str], dict] = {}
-        has_official_history = any(
-            row.get("channel") == channel and row.get("source") == channel
+        has_live_history = any(
+            row.get("channel") == channel and row.get("source") != "seed"
             for row in live_rows
         )
         for row in seed_history.get("channels", {}).get(channel, []):
             item = dict(row)
             # 已有真实来源时完全以真实曲线为准。静态种子只在首次尚未采到
             # 任何行情时兜底，不能与真实数据混绘，否则会产生假跳变。
-            if has_official_history:
+            if has_live_history:
                 continue
             by_day[(item.get("brand", ""), item.get("effective_at", "")[:10])] = item
         for row in live_rows:

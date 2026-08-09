@@ -577,6 +577,10 @@ _BRAND_NAMES = (
     "六福珠宝", "老庙黄金", "菜百首饰", "谢瑞麟",
     "周大生", "中国珠宝",
 )
+_JINJIA_BRAND_NAMES = {
+    "老庙黄金": "老庙",
+    "菜百首饰": "菜百",
+}
 def _cell_text(cell: str) -> str:
     return re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cell))).strip()
 
@@ -654,6 +658,39 @@ def parse_smm_html(html: str) -> list[dict]:
     return dedup
 
 
+def parse_jinjia_history_html(html: str, brand: str) -> list[dict]:
+    """解析金价网品牌页中的黄金饰品历史价格。
+
+    页面每个 ``li`` 同时包含黄金和铂金报价；取第一个“元/克”数值，即黄金
+    饰品价。该来源用于补齐 SMM 公共页面不提供的历史区间。
+    """
+    if not html or brand not in _BRAND_NAMES:
+        return []
+    page_brand = _JINJIA_BRAND_NAMES.get(brand, brand)
+    by_day: dict[str, dict] = {}
+    for block in re.findall(r"<li[^>]*>(.*?)</li>", html, flags=re.IGNORECASE | re.DOTALL):
+        text = _cell_text(block)
+        if page_brand not in text:
+            continue
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+        price_match = re.search(r"(\d{3,5}(?:\.\d+)?)\s*元/克", text)
+        if not date_match or not price_match:
+            continue
+        try:
+            price = float(price_match.group(1))
+        except ValueError:
+            continue
+        if not _valid_price("smm", price):
+            continue
+        day = date_match.group(1)
+        by_day[day] = {
+            "brand": brand,
+            "price": round(price, 2),
+            "effective_at": day + "T00:00:00+08:00",
+        }
+    return [by_day[day] for day in sorted(by_day)]
+
+
 __all__ = [
     "CHANNELS",
     "CHANNEL_META",
@@ -671,4 +708,5 @@ __all__ = [
     "parse_yahoo_csv",
     "parse_yahoo_chart",
     "parse_smm_html",
+    "parse_jinjia_history_html",
 ]

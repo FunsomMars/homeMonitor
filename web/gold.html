@@ -653,7 +653,7 @@
               const last = s.points && s.points.length ? s.points[s.points.length - 1][1] : null;
               return s.brand + ':' + (last == null ? '--' : fmtNumber(last, 0));
             }).join('  ·  ');
-            headerMeta.textContent = '共 ' + seriesData.length + ' 品牌 · 官方采集 ' + observedDays + ' 日'
+            headerMeta.textContent = '共 ' + seriesData.length + ' 品牌 · 公开历史 ' + observedDays + ' 日'
               + (lastDate ? ' · ' + lastDate : '') + ' · ' + summary;
           }
         }).catch((err) => {

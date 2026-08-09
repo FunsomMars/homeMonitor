@@ -16,7 +16,7 @@ from server.gold_format import (  # noqa: E402
     CHANNELS, CHANNEL_META,
     load_seed_history, load_seed_brands,
     build_current, build_history_series, build_channels_meta,
-    parse_sge_table, parse_sge_daily_html, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
+    parse_sge_table, parse_sge_daily_html, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html, parse_jinjia_history_html,
 )
 from server.app import merge_gold_history  # noqa: E402
 
@@ -99,6 +99,13 @@ SMM_HTML_PRODUCT_PRIORITY = """
   <tr><td>周大福</td><td>投资类黄金</td><td>1148</td><td>2026-08-09</td></tr>
   <tr><td>周大福</td><td>首饰黄金</td><td>1308</td><td>2026-08-09</td></tr>
 </table>
+"""
+
+JINJIA_HISTORY_HTML = """
+<ul id="dlist">
+  <li><div class="name">周大福</div><div class="new">1308 元/克</div><div class="rise">678 元/克</div><div class="time">2026-08-08</div></li>
+  <li><div class="name">周大福</div><div class="new">1286 元/克</div><div class="rise">673 元/克</div><div class="time">2026-08-07</div></li>
+</ul>
 """
 
 
@@ -213,6 +220,13 @@ class YahooParserTest(unittest.TestCase):
 
 
 class SmmParserTest(unittest.TestCase):
+    def test_jinjia_history_uses_gold_price_not_platinum_price(self):
+        rows = parse_jinjia_history_html(JINJIA_HISTORY_HTML, "周大福")
+        self.assertEqual(rows, [
+            {"brand": "周大福", "price": 1286.0, "effective_at": "2026-08-07T00:00:00+08:00"},
+            {"brand": "周大福", "price": 1308.0, "effective_at": "2026-08-08T00:00:00+08:00"},
+        ])
+
     def test_prefers_retail_gold_over_ingot_or_investment_price(self):
         rows = {row["brand"]: row for row in parse_smm_html(SMM_HTML_PRODUCT_PRIORITY)}
         self.assertEqual(rows["周生生"]["price"], 1315)
