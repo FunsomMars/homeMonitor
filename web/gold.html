@@ -647,11 +647,14 @@
               .map((s) => (s.points && s.points.length ? s.points[s.points.length - 1][0] : ''))
               .filter(Boolean);
             const lastDate = lastDates.length ? lastDates.reduce((a, b) => (a > b ? a : b)) : '';
+            const observedDays = new Set(seriesData.flatMap((s) =>
+              (s.points || []).map((p) => p[0]))).size;
             const summary = seriesData.map((s) => {
               const last = s.points && s.points.length ? s.points[s.points.length - 1][1] : null;
               return s.brand + ':' + (last == null ? '--' : fmtNumber(last, 0));
             }).join('  ·  ');
-            headerMeta.textContent = '共 ' + seriesData.length + ' 品牌' + (lastDate ? ' · ' + lastDate : '') + ' · ' + summary;
+            headerMeta.textContent = '共 ' + seriesData.length + ' 品牌 · 官方采集 ' + observedDays + ' 日'
+              + (lastDate ? ' · ' + lastDate : '') + ' · ' + summary;
           }
         }).catch((err) => {
           console.error('smm history error', err);
