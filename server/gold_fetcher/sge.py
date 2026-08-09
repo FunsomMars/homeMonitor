@@ -18,14 +18,16 @@ import http.client
 import json
 import logging
 import re
+from datetime import date
 import urllib.error
 import urllib.request
 
-from server.gold_format import FetchResult, parse_sge_table
+from server.gold_format import FetchResult, parse_sge_daily_html, parse_sge_table
 
 logger = logging.getLogger(__name__)
 
 QUOTATIONS_URL = "https://www.sge.com.cn/graph/quotations"
+DAILY_URL = "https://www.sge.com.cn/sjzx/quotation_daily_new?start_date={date}&end_date={date}"
 LIST_URL = QUOTATIONS_URL
 HTTP_TIMEOUT = 8
 
@@ -87,6 +89,12 @@ def parse_sge_quote(payload: dict) -> list[dict]:
     return [{"brand": payload.get("heyue") or "Au99.99", "price": round(price, 2), "effective_at": effective_at}]
 
 
+def fetch_daily(day: date) -> list[dict]:
+    """读取指定日期的上金所官方日行情；非交易日会返回空列表或最近可用日。"""
+    html = _http_get(DAILY_URL.format(date=day.isoformat()))
+    return parse_sge_daily_html(html)
+
+
 class SgeCurrentFetcher:
     name = "sge"
     kind = "current"
@@ -107,4 +115,5 @@ class SgeCurrentFetcher:
                            error=None if rows else "no quotation data")
 
 
-__all__ = ["SgeCurrentFetcher", "LIST_URL", "QUOTATIONS_URL", "parse_sge_quote"]
+__all__ = ["SgeCurrentFetcher", "LIST_URL", "QUOTATIONS_URL", "DAILY_URL",
+           "fetch_daily", "parse_sge_quote"]

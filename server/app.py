@@ -44,8 +44,19 @@ def merge_gold_history(seed_history: dict, live_rows: list[dict]) -> dict:
     }
     for channel in CHANNELS:
         by_day: dict[tuple[str, str], dict] = {}
+        official_dates = [
+            row["effective_at"][:10] for row in live_rows
+            if row.get("channel") == channel and row.get("source") == channel
+        ]
+        official_start = min(official_dates) if official_dates else None
+        official_end = max(official_dates) if official_dates else None
         for row in seed_history.get("channels", {}).get(channel, []):
             item = dict(row)
+            date = item.get("effective_at", "")[:10]
+            # 现货/期货已有官方历史覆盖后，不再混入同一区间的静态样本。
+            if (channel in {"sge", "shfe"} and official_start
+                    and official_start <= date <= official_end):
+                continue
             by_day[(item.get("brand", ""), item.get("effective_at", "")[:10])] = item
         for row in live_rows:
             if row.get("channel") != channel:

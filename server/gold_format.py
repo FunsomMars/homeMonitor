@@ -402,6 +402,37 @@ def parse_sge_table(html: str) -> list[dict]:
     return out
 
 
+def parse_sge_daily_html(html: str) -> list[dict]:
+    """解析上金所官方日行情页中的 Au99.99 收盘价。"""
+    if not html or "<table" not in html.lower():
+        return []
+    out: list[dict] = []
+    for tr in re.findall(r"<tr.*?</tr>", html, flags=re.IGNORECASE | re.DOTALL):
+        cells = [re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", cell))).strip()
+                 for cell in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr,
+                                        flags=re.IGNORECASE | re.DOTALL)]
+        # 页面保留了一个被注释的序号列，正则仍可能捕获它；据实际日期定位字段。
+        date_index = next((index for index, cell in enumerate(cells)
+                           if re.fullmatch(r"\d{4}-\d{2}-\d{2}", cell)), None)
+        if date_index is None or len(cells) <= date_index + 5:
+            continue
+        if cells[date_index + 1].strip().lower() != "au99.99":
+            continue
+        try:
+            # 日期、合约、开盘、最高、最低、收盘价
+            price = float(cells[date_index + 5].replace(",", ""))
+        except ValueError:
+            continue
+        if not _valid_price("sge", price):
+            continue
+        out.append({
+            "brand": "Au99.99",
+            "price": round(price, 2),
+            "effective_at": cells[date_index] + "T00:00:00+08:00",
+        })
+    return out
+
+
 # SHFE 主力合约日结算价 HTML：列依次为 合约代码, 开盘, 最高, 最低, 收盘, 结算, 涨跌, 成交量, 持仓量
 def parse_shfe_kx(html: str) -> list[dict]:
     """从 SHFE 日结行情 HTML 解析黄金主力合约。
@@ -621,6 +652,7 @@ __all__ = [
     "build_history_series",
     "build_channels_meta",
     "parse_sge_table",
+    "parse_sge_daily_html",
     "parse_shfe_kx",
     "parse_shfe_json",
     "parse_yahoo_csv",

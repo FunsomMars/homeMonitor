@@ -62,6 +62,12 @@ def _http_get_json(url: str) -> dict:
     return json.loads(body.decode("utf-8", errors="replace"))
 
 
+def fetch_daily(day) -> list[dict]:
+    """读取指定交易日的上期所黄金主力结算价。"""
+    payload = _http_get_json(DATA_URL.format(date=day.strftime("%Y%m%d")))
+    return parse_shfe_json(payload, day.isoformat())
+
+
 class ShfeFuturesFetcher:
     name = "shfe"
     kind = "current"
@@ -75,10 +81,8 @@ class ShfeFuturesFetcher:
         today = datetime.now().astimezone().date()
         for offset in range(7):
             day = today - timedelta(days=offset)
-            date_text = day.isoformat()
             try:
-                payload = _http_get_json(DATA_URL.format(date=day.strftime("%Y%m%d")))
-                rows = parse_shfe_json(payload, date_text)
+                rows = fetch_daily(day)
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
                 errors.append(str(exc))
                 continue
@@ -88,4 +92,4 @@ class ShfeFuturesFetcher:
                            error="; ".join(errors[-2:]) or "no settlement data")
 
 
-__all__ = ["ShfeFuturesFetcher", "LIST_URL", "DATA_URL"]
+__all__ = ["ShfeFuturesFetcher", "LIST_URL", "DATA_URL", "fetch_daily"]

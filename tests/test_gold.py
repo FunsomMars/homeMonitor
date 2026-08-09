@@ -16,7 +16,7 @@ from server.gold_format import (  # noqa: E402
     CHANNELS, CHANNEL_META,
     load_seed_history, load_seed_brands,
     build_current, build_history_series, build_channels_meta,
-    parse_sge_table, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
+    parse_sge_table, parse_sge_daily_html, parse_shfe_kx, parse_shfe_json, parse_yahoo_csv, parse_yahoo_chart, parse_smm_html,
 )
 from server.app import merge_gold_history  # noqa: E402
 
@@ -94,6 +94,16 @@ SMM_HTML_NEW = """
 
 
 class SgeParserTest(unittest.TestCase):
+    def test_daily_html_uses_au9999_close_price(self):
+        rows = parse_sge_daily_html("""
+        <table><tr><td>2026-07-08</td><td>Au99.99</td><td>908.00</td>
+        <td>912.00</td><td>895.95</td><td>901.07</td></tr></table>
+        """)
+        self.assertEqual(rows, [{
+            "brand": "Au99.99", "price": 901.07,
+            "effective_at": "2026-07-08T00:00:00+08:00",
+        }])
+
     def test_returns_primary_contract(self):
         rows = parse_sge_table(SGE_HTML)
         brands = [r["brand"] for r in rows]
