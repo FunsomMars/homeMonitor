@@ -265,7 +265,7 @@ class SeedLoadTest(unittest.TestCase):
 
 
 class SeriesBuildTest(unittest.TestCase):
-    def test_merge_history_keeps_seed_curve_and_overlays_live_day(self):
+    def test_merge_history_uses_official_curve_for_sge_when_available(self):
         seed = {"channels": {ch: [] for ch in CHANNELS}, "as_of": None}
         seed["channels"]["sge"] = [{
             "brand": "", "price": 783.52,
@@ -284,7 +284,7 @@ class SeriesBuildTest(unittest.TestCase):
         sge = build_history_series("sge", "", 180, seed_history=merged)
         smm = build_history_series("smm", "", 180, seed_history=merged)
         self.assertEqual(sge["series"][-1]["date"], "2026-08-08")
-        self.assertEqual(len(sge["series"]), 2)
+        self.assertEqual(len(sge["series"]), 1)
         self.assertEqual(smm["series"][0]["points"][-1], ["2026-08-08", 1286.0])
 
     def test_build_channels_meta(self):
