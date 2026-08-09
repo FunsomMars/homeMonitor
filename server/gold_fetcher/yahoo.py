@@ -15,6 +15,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 SYMBOL = "GC=F"
 HISTORY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/" + SYMBOL
 HTTP_TIMEOUT = 8
+CURL_TIMEOUT = 15
 
 # 取近 1 年（Yahoo Finance 免费 API 最大返回窗口限制为 ~1y/单次）
 DEFAULT_PERIOD_DAYS = 365
@@ -53,6 +55,22 @@ def _http_get(url: str) -> dict:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except http.client.IncompleteRead as exc:
         return json.loads(exc.partial.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        # 部分网络环境会只对 Python 的 TLS/HTTP 栈返回 403/429，而同一公开
+        # 接口的浏览器请求正常。Mac 自带 curl 采用浏览器兼容链路，作为兜底。
+        if exc.code not in {403, 429}:
+            raise
+        proc = subprocess.run(
+            ["curl", "--fail", "--silent", "--show-error", "--location",
+             "--connect-timeout", "5", "--max-time", str(HTTP_TIMEOUT),
+             "--header", "User-Agent: Mozilla/5.0", url],
+            capture_output=True,
+            timeout=CURL_TIMEOUT,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise exc
+        return json.loads(proc.stdout.decode("utf-8", errors="replace"))
 
 
 class YahooGoldFetcher:
