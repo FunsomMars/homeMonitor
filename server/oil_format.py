@@ -187,14 +187,20 @@ def build_history_series(province: str, fuel: str, days: int, history_rows=None,
         points = [p for p in points if datetime.fromisoformat(p["effective_at"]) >= cutoff]
 
     series = [{"date": p["effective_at"][:10], "value": p["price"]} for p in points]
-    start_date = series[0]["date"] if series else None
-    end_date = series[-1]["date"] if series else None
+    point_dates = [point["date"] for point in series]
+    start_date = point_dates[0] if point_dates else None
+    end_date = point_dates[-1] if point_dates else None
     adj_by_date: dict[str, dict] = {}
     for adjustment in adjustments:
-        date = adjustment["effective_at"][:10]
-        if start_date and start_date <= date <= end_date and date not in adj_by_date:
-            adj_by_date[date] = {
-                "date": date,
+        event_date = adjustment["effective_at"][:10]
+        if not start_date or not (start_date <= event_date <= end_date):
+            continue
+        # 公告日有时没有单独价格采样点，标到紧随其后的实际油价点，
+        # 使虚线与价格跳变位置保持一致（如 7/17 公告对应 7/18 新价格）。
+        chart_date = next((date for date in point_dates if date >= event_date), None)
+        if chart_date and chart_date not in adj_by_date:
+            adj_by_date[chart_date] = {
+                "date": chart_date,
                 "gasoline_change": adjustment["gasoline_change"],
                 "diesel_change": adjustment["diesel_change"],
             }

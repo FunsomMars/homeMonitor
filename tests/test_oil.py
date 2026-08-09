@@ -100,7 +100,7 @@ class TestBuildHistorySeries(unittest.TestCase):
         }]
         h = of.build_history_series("江苏", "92", 365, rows, adjustments)
         self.assertEqual(h["adjustments"], [{
-            "date": "2026-07-17", "gasoline_change": 300, "diesel_change": 290,
+            "date": "2026-07-18", "gasoline_change": 300, "diesel_change": 290,
         }])
 
 
