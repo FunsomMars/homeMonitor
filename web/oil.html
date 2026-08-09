@@ -12,6 +12,20 @@
     /* 油价页背景与 gold.html 一致：覆盖 common.css 的 --bg 偏绿色 (#f3f6f5) */
     :root { --bg: #ffffff; }
     body { background: var(--bg); }
+    /* 四个核心区块标题需要比辅助信息更醒目。 */
+    .oil-section-title {
+      margin-bottom: 12px;
+      color: var(--ink);
+      font-size: 19px;
+      font-weight: 750;
+      letter-spacing: .04em;
+      text-transform: none;
+    }
+    .oil-section-title .hint {
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
     /* 油价版两列：右侧"最近一次调价 + 地图"上下排布 */
     .row2-oil { grid-template-columns: 1fr 1.3fr; align-items: stretch; gap: 24px; }
     .row2-oil .stack { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
@@ -44,7 +58,7 @@
 <main>
   <!-- 功能模块 1：省份选择 / 油品选择 -->
   <section>
-    <h2>当前油价 <span class="hint" id="asOf"></span></h2>
+    <h2 class="oil-section-title">当前油价 <span class="hint" id="asOf"></span></h2>
     <div class="toolbar">
       <span class="label">省份：</span>
       <select id="province"></select>
@@ -60,7 +74,7 @@
 
   <!-- 功能模块 2：涨跌幅统计 + 趋势曲线 + 时间范围 -->
   <section>
-    <h2>趋势分析 <span class="hint" id="rangeHint"></span></h2>
+    <h2 class="oil-section-title">趋势分析 <span class="hint" id="rangeHint"></span></h2>
     <div class="toolbar">
       <span class="label">时间范围：</span>
       <button data-days="30">近 1 月</button>
@@ -75,7 +89,7 @@
   <!-- 功能模块 3：左侧调价历史；右侧 最近一次调价 + 全国 92# 油价地图 -->
   <div class="row2 row2-oil">
     <section>
-      <h2>调价历史</h2>
+      <h2 class="oil-section-title">调价历史</h2>
       <table class="tbl" id="adjTable">
         <thead><tr><th>生效时间</th><th>汽油 元/吨</th><th>柴油 元/吨</th><th>来源</th></tr></thead>
         <tbody></tbody>
@@ -83,7 +97,7 @@
     </section>
     <section class="stack">
       <div>
-        <h2>最近一次调价</h2>
+        <h2 class="oil-section-title">最近一次调价</h2>
         <div class="adjust-inline" id="adjustCard">
           <span class="item"><strong id="adjGasoline">—</strong><small>汽油 元/吨</small></span>
           <span class="item"><strong id="adjDiesel">—</strong><small>柴油 元/吨</small></span>

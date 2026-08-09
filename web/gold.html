@@ -17,7 +17,7 @@
       --muted: #8a8270;
       --accent: #b58a2c;
     }
-    html, body { background: var(--bg); }
+    html, body { background: var(--bg); overflow: visible; }
     .gold-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -809,6 +809,20 @@
       } else {
         boot();
       }
+
+      // 由首页外层内容区统一滚动，避免 iframe 再出现一条内层滚动条。
+      function reportHeight() {
+        const height = Math.max(
+          document.documentElement.scrollHeight,
+          document.body ? document.body.scrollHeight : 0,
+        );
+        parent.postMessage({ type: 'child-height', height }, '*');
+      }
+      reportHeight();
+      addEventListener('resize', reportHeight);
+      if (window.ResizeObserver) new ResizeObserver(reportHeight).observe(document.body);
+      setTimeout(reportHeight, 500);
+      setTimeout(reportHeight, 1500);
     })();
   </script>
 </body>
