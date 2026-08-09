@@ -378,7 +378,8 @@
       // ---------- localStorage 缓存层（stale-while-revalidate） ----------
       // 思路：current/channels 用短 TTL（~30s）实时校验；history 用长 TTL（~10min）
       // 首次访问没有缓存就拉网络；之后命中立即返回 cached.data，stale 则后台刷新。
-      const CACHE_VERSION = 'v3';
+      // 数据口径修正后递增版本，清除浏览器中混入种子数据的旧历史缓存。
+      const CACHE_VERSION = 'v4';
       const CACHE_TTL = {
         current: 30 * 1000,
         channels: 30 * 1000,
