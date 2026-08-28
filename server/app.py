@@ -151,6 +151,9 @@ class Store:
         removed = 0
         for backup in backups[max(1, keep_days):]:
             backup.unlink()
+            # WAL 备份在被校验或读取时可能留下同名辅助文件，也随主备份轮换。
+            backup.with_name(backup.name + "-wal").unlink(missing_ok=True)
+            backup.with_name(backup.name + "-shm").unlink(missing_ok=True)
             removed += 1
         return removed
 
