@@ -8,7 +8,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -30,6 +30,9 @@ DEFAULT_CONFIG = ROOT / "config" / "devices.json"
 DEFAULT_DB = ROOT / "data" / "telemetry.db"
 WEB_ROOT = ROOT / "web"
 LOG = logging.getLogger("home-monitor")
+DEFAULT_ADVERTISEMENT_RETENTION_DAYS = 14
+DEFAULT_BACKUP_RETENTION_DAYS = 30
+DEFAULT_MAINTENANCE_INTERVAL_SEC = 6 * 3600
 
 
 def now_iso() -> str:
@@ -75,9 +78,11 @@ class Store:
     def __init__(self, db_path: Path, config_path: Path, ingest_token: str | None = None,
                  gold_db_path: Path | None = None, oil_db_path: Path | None = None):
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.Lock()
+        self._configure_database()
         self.proxies = self._load_proxies(config_path)
         config_network = self._read_config(config_path).get("network", {})
         self.ingest_token = ingest_token if ingest_token is not None else str(config_network.get("ingest_token", ""))
@@ -100,6 +105,74 @@ class Store:
         # 油价子模块（独立 SQLite，抓取失败时 API 继续回退 seed）
         self.oil = OilStore(oil_db_path or DEFAULT_OIL_DB)
         self._init_db()
+
+    def _configure_database(self):
+        """为频繁写入的遥测库启用可抗异常断电的 SQLite 设置。"""
+        with self.lock:
+            # WAL 将已提交事务与主库页分离；突然断电后 SQLite 可在下次打开时
+            # 回放或丢弃未完成 WAL，而不直接破坏主库。FULL 要求事务提交更严格落盘。
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.execute("PRAGMA wal_autocheckpoint=1000")
+            self.db.execute("PRAGMA busy_timeout=5000")
+
+    def purge_advertisements(self, retention_days: int = DEFAULT_ADVERTISEMENT_RETENTION_DAYS,
+                             now: datetime | None = None) -> int:
+        """删除超出保留期的原始蓝牙广播；温湿度 readings 永久保留。"""
+        retention_days = max(1, retention_days)
+        now = now or datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=retention_days)).isoformat(timespec="seconds")
+        with self.lock:
+            cursor = self.db.execute("DELETE FROM advertisements WHERE observed_at < ?", (cutoff,))
+            self.db.commit()
+            return max(0, cursor.rowcount)
+
+    def backup_database(self, target: Path) -> Path:
+        """使用 SQLite 在线备份 API 生成可恢复的一致性快照。"""
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name("." + target.name + ".tmp")
+        temporary.unlink(missing_ok=True)
+        destination = sqlite3.connect(temporary)
+        try:
+            with self.lock:
+                self.db.backup(destination)
+            integrity = destination.execute("PRAGMA integrity_check").fetchone()[0]
+            if integrity != "ok":
+                raise sqlite3.DatabaseError(f"backup integrity check failed: {integrity}")
+        finally:
+            destination.close()
+        os.replace(temporary, target)
+        return target
+
+    @staticmethod
+    def prune_backups(backup_dir: Path, keep_days: int = DEFAULT_BACKUP_RETENTION_DAYS) -> int:
+        """保留最近 N 个每日遥测备份，删除更早的自动备份。"""
+        backups = sorted(backup_dir.glob("telemetry-*.db"), key=lambda path: path.name, reverse=True)
+        removed = 0
+        for backup in backups[max(1, keep_days):]:
+            backup.unlink()
+            removed += 1
+        return removed
+
+    def run_maintenance(self, backup_dir: Path,
+                        advertisement_retention_days: int = DEFAULT_ADVERTISEMENT_RETENTION_DAYS,
+                        backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS) -> dict:
+        """清理可再生的原始广播，并保证每天至少有一份一致性备份。"""
+        removed_ads = self.purge_advertisements(advertisement_retention_days)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        daily_backup = backup_dir / f"telemetry-{stamp}.db"
+        if not daily_backup.exists():
+            self.backup_database(daily_backup)
+        removed_backups = self.prune_backups(backup_dir, backup_retention_days)
+        return {
+            "advertisements_removed": removed_ads,
+            "backup": str(daily_backup),
+            "backups_removed": removed_backups,
+        }
+
+    def close(self):
+        with self.lock:
+            self.db.close()
 
     @staticmethod
     def _read_config(path: Path) -> dict:
@@ -371,6 +444,41 @@ class DemoReader(threading.Thread):
             self.stop_event.wait(60)
 
 
+class DatabaseMaintenanceThread(threading.Thread):
+    """定期执行遥测库备份与可再生广播记录清理。"""
+    daemon = True
+
+    def __init__(self, store: Store, backup_dir: Path,
+                 advertisement_retention_days: int = DEFAULT_ADVERTISEMENT_RETENTION_DAYS,
+                 backup_retention_days: int = DEFAULT_BACKUP_RETENTION_DAYS,
+                 interval_sec: int = DEFAULT_MAINTENANCE_INTERVAL_SEC):
+        super().__init__(name="telemetry-db-maintenance")
+        self.store = store
+        self.backup_dir = backup_dir
+        self.advertisement_retention_days = advertisement_retention_days
+        self.backup_retention_days = backup_retention_days
+        self.interval_sec = max(60, interval_sec)
+        self.stop_event = threading.Event()
+
+    def run_once(self):
+        result = self.store.run_maintenance(
+            self.backup_dir,
+            advertisement_retention_days=self.advertisement_retention_days,
+            backup_retention_days=self.backup_retention_days,
+        )
+        LOG.info("telemetry maintenance removed_ads=%d removed_backups=%d backup=%s",
+                 result["advertisements_removed"], result["backups_removed"], result["backup"])
+        return result
+
+    def run(self):
+        while not self.stop_event.is_set():
+            try:
+                self.run_once()
+            except Exception:
+                LOG.exception("telemetry maintenance failed")
+            self.stop_event.wait(self.interval_sec)
+
+
 def json_response(handler: BaseHTTPRequestHandler, payload: object, status: int = 200):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
@@ -624,6 +732,22 @@ def main():
                         help="gold prices sqlite (independent file)")
     parser.add_argument("--oil-db", type=Path, default=DEFAULT_OIL_DB,
                         help="oil prices sqlite (independent file)")
+    parser.add_argument("--backup-dir", type=Path,
+                        help="telemetry SQLite daily backup directory (default: <db>/backups)")
+    parser.add_argument("--advertisement-retention-days", type=int,
+                        default=int(os.getenv("HOME_MONITOR_ADVERTISEMENT_RETENTION_DAYS",
+                                              DEFAULT_ADVERTISEMENT_RETENTION_DAYS)),
+                        help="raw BLE advertisement retention days (default: 14)")
+    parser.add_argument("--backup-retention-days", type=int,
+                        default=int(os.getenv("HOME_MONITOR_BACKUP_RETENTION_DAYS",
+                                              DEFAULT_BACKUP_RETENTION_DAYS)),
+                        help="daily telemetry backup retention days (default: 30)")
+    parser.add_argument("--maintenance-interval-seconds", type=int,
+                        default=int(os.getenv("HOME_MONITOR_MAINTENANCE_INTERVAL_SEC",
+                                              DEFAULT_MAINTENANCE_INTERVAL_SEC)),
+                        help="database maintenance interval in seconds (default: 21600)")
+    parser.add_argument("--no-db-maintenance", action="store_true",
+                        help="disable telemetry backup and retention maintenance")
     parser.add_argument("--ingest-token", default=os.getenv("HOME_MONITOR_INGEST_TOKEN"))
     parser.add_argument("--no-gold-scheduler", action="store_true",
                         help="disable background gold fetcher daemon")
@@ -637,6 +761,7 @@ def main():
     readers: list[threading.Thread] = []
     sched = None  # 后台黄金调度器（不一定启动）
     oil_sched = None
+    db_maintenance = None
     if args.demo:
         readers.append(DemoReader(store))
     else:
@@ -666,6 +791,15 @@ def main():
         from .oil_fetcher.scheduler import OilScheduler
         oil_sched = OilScheduler(store.oil)
         oil_sched.start()
+    if not args.no_db_maintenance:
+        db_maintenance = DatabaseMaintenanceThread(
+            store,
+            args.backup_dir or args.db.parent / "backups",
+            advertisement_retention_days=args.advertisement_retention_days,
+            backup_retention_days=args.backup_retention_days,
+            interval_sec=args.maintenance_interval_seconds,
+        )
+        db_maintenance.start()
     for reader in readers:
         reader.start()
     Handler.store = store
@@ -686,6 +820,10 @@ def main():
             sched.stop_event.set()
         if oil_sched is not None and hasattr(oil_sched, "stop_event"):
             oil_sched.stop_event.set()
+        if db_maintenance is not None:
+            db_maintenance.stop_event.set()
+            db_maintenance.join(timeout=5)
+        store.close()
 
 
 if __name__ == "__main__":

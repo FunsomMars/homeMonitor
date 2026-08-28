@@ -1,6 +1,8 @@
 import json
+import sqlite3
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from server.app import Store
@@ -35,6 +37,32 @@ class DecoderTests(unittest.TestCase):
 
 
 class StoreTests(unittest.TestCase):
+    def test_wal_backup_and_advertisement_retention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "devices.json"
+            config.write_text(json.dumps({"devices": []}), encoding="utf-8")
+            store = Store(root / "test.db", config)
+            store.add_advertisement({
+                "address": "AA:BB", "observed_at": "2026-07-01T00:00:00+00:00",
+                "service_data": {},
+            })
+            store.add_advertisement({
+                "address": "AA:CC", "observed_at": "2026-08-27T00:00:00+00:00",
+                "service_data": {},
+            })
+            self.assertEqual(store.db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            removed = store.purge_advertisements(
+                retention_days=14, now=datetime(2026, 8, 28, tzinfo=timezone.utc))
+            self.assertEqual(removed, 1)
+            backup = root / "backups" / "telemetry-20260828.db"
+            store.backup_database(backup)
+            check = sqlite3.connect(backup)
+            self.assertEqual(check.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(check.execute("SELECT count(*) FROM advertisements").fetchone()[0], 1)
+            check.close()
+            store.close()
+
     def test_advertisement_and_reading(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
